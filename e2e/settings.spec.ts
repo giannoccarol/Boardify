@@ -18,7 +18,8 @@ test.describe("settings", () => {
       () => expect(page.locator(".settings-titlebar")).toBeVisible(),
     );
     expectBudget(ms, BUDGET.renderWarmMs, "settings render");
-    const nav = page.locator(".settings-nav-item").nth(1);
+    // Selettore per icona, non per indice: i pannelli possono riordinarsi.
+    const nav = page.locator(".settings-nav-item:has(.nav-icon-general)");
     const panelMs = await measureUntil(
       () => nav.click(),
       () => expect(nav).toHaveAttribute("aria-current", "page"),
@@ -44,8 +45,8 @@ test.describe("settings", () => {
   test("shortcut recorder: assegna e valida", async ({ page }) => {
     const errors = watchConsole(page);
     await gotoView(page, "settings", true);
-    // Il recorder sta nel pannello keyboard (3° nav).
-    const keyboard = page.locator(".settings-nav-item").nth(2);
+    // Il recorder sta nel pannello keyboard (selettore per icona, non indice).
+    const keyboard = page.locator(".settings-nav-item:has(.nav-icon-keyboard)");
     await keyboard.click();
     await expect(keyboard).toHaveAttribute("aria-current", "page");
     const rec = page.locator(".shortcut-recorder button").first();

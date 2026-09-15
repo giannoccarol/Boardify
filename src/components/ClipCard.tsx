@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
-import { motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Pin, Copy, Star, Trash2, ShieldAlert, Code2, Link2, Play, Check } from "lucide-react";
 import { useClipImageSrc } from "../clipImage";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -101,7 +101,6 @@ export const ClipCard = memo(function ClipCard({ clip, selected, index, variant 
     >
       <motion.div
         initial={false}
-        animate={hovered || focused || copied ? "hover" : "rest"}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         onFocusCapture={() => setFocused(true)}
@@ -145,19 +144,26 @@ export const ClipCard = memo(function ClipCard({ clip, selected, index, variant 
         onDoubleClick={(e) => { if (!(e.target as HTMLElement).closest("button")) activate(); }}
       >
         <CardFace clip={clip} />
-        <motion.div
-          className="clip-actions"
-          role="group"
-          aria-label={t("card.actions")}
-          variants={{ rest: { opacity: 0, y: reduce ? 0 : -4 }, hover: { opacity: 1, y: 0 } }}
-          transition={snappy}
-          style={{ pointerEvents: hovered || focused || copied ? "auto" : "none" }}
-        >
+        {/* Azioni montate solo all'occorrenza: su liste lunghe evita migliaia
+            di nodi/SVG nascosti. Stesso fade di prima (initial/animate/exit). */}
+        <AnimatePresence initial={false}>
+          {(hovered || focused || copied) && (
+            <motion.div
+              className="clip-actions"
+              role="group"
+              aria-label={t("card.actions")}
+              initial={{ opacity: 0, y: reduce ? 0 : -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, transition: { duration: 0.1 } }}
+              transition={snappy}
+            >
           <HoverBtn title={t("action.pin")} active={!!clip.is_pinned} onClick={() => togglePin(clip.id)}><Pin size={13} className={clip.is_pinned ? "fill-current" : ""} /></HoverBtn>
           <HoverBtn title={copied ? t("card.copied") : t("action.copy")} active={copied} onClick={async () => { if (await copyClip(clip.id)) flashCopied(); }}>{copied ? <Check size={13} /> : <Copy size={13} />}</HoverBtn>
           <HoverBtn title={t("action.delete")} onClick={() => deleteClip(clip.id)}><Trash2 size={13} /></HoverBtn>
           <HoverBtn title={t("action.favorite")} active={clip.is_favorite} onClick={() => toggleFav(clip.id)}><Star size={13} className={clip.is_favorite ? "fill-current" : ""} /></HoverBtn>
-        </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
         {copied && <span className="sr-only" role="status">{t("card.copied")}</span>}
       </motion.div>
     </motion.div>

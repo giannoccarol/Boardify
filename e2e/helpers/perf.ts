@@ -70,3 +70,34 @@ export async function sampleFrames(
 export function expectBudget(ms: number, budget: number, what: string) {
   expect(ms, `${what}: ${ms}ms oltre budget ${budget}ms`).toBeLessThan(budget);
 }
+
+/**
+ * Esegue `fn` registrando i longtask (>50ms) del thread UI.
+ * Ritorna conteggio, totale e max: il segnale per le ottimizzazioni.
+ */
+export async function measureLongTasks(
+  page: Page,
+  fn: () => Promise<void>,
+): Promise<{ count: number; total: number; max: number }> {
+  await page.evaluate(() => {
+    (window as unknown as { __lt: PerformanceEntry[] }).__lt = [];
+    const obs = new PerformanceObserver((list) => {
+      (window as unknown as { __lt: PerformanceEntry[] }).__lt.push(...list.getEntries());
+    });
+    obs.observe({ entryTypes: ["longtask"] });
+    (window as unknown as { __ltObs: PerformanceObserver }).__ltObs = obs;
+  });
+  await fn();
+  // I longtask arrivano asincroni: breve assestamento.
+  await page.waitForTimeout(600);
+  return page.evaluate(() => {
+    (window as unknown as { __ltObs: PerformanceObserver }).__ltObs.disconnect();
+    const entries = (window as unknown as { __lt: PerformanceEntry[] }).__lt;
+    const ds = entries.map((e) => e.duration);
+    return {
+      count: ds.length,
+      total: Math.round(ds.reduce((s, d) => s + d, 0)),
+      max: Math.round(Math.max(0, ...ds)),
+    };
+  });
+}

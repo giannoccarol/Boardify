@@ -49,6 +49,25 @@ Tray, shortcut globali, watcher e show/hide nativo restano fuori
 (`demoFav`/`demoPin`/`demoDeleted`/`demoNotes`) così le mutazioni
 sopravvivono ai refresh come col DB vero.
 
+## Mock pesante (`?heavy=N`)
+
+`src/demo.ts` genera N clip deterministiche (seed fisso, kind misti,
+immagini incluse): `/?view=library&heavy=300`. Usalo per il lavoro di
+fluidità, mai per gli assert funzionali (numeri fissi solo dopo la baseline).
+
+Lezioni misurate (300 clip, library, headless):
+
+| Ipotesi | Risultato | Decisione |
+|---|---|---|
+| Memoize parser puri | 0% (925→936ms) | revert |
+| `layout` framer off | 0% | no (erano le animazioni da tenere) |
+| Azioni hover montate sempre → solo su hover/focus (`AnimatePresence` + exit) | longtask total −50% (925→460ms) | tenuto, stessi fade |
+| `content-visibility: auto` su `.clip-card`/`.clip-row` | −20% sul resto (571→460ms) | tenuto, stessi pixel |
+
+Regola: un'ipotesi per cambio, numero prima/dopo, se non migliora si reverta
+(come sopra). Le animazioni non si toccano: si taglia il lavoro invisibile
+(nodi nascosti, paint fuori viewport), mai il motion design.
+
 Calibrazione: fai girare 3× in locale, budget ≈ 2× il peggiore. In CI (headless,
 macchine lente) i budget sono larghi apposta: beccano regressioni 5-10×, non il 20%.
 

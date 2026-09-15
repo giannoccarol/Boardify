@@ -105,6 +105,68 @@ export const DEMO_CLIPS: Clip[] = [
   }),
 ];
 
+// Mock pesante per i test di fluidità: `?heavy=300` aggiunge N clip sintetiche
+// deterministiche (seed fisso) mescolando kind e lunghezze. Solo dev/test,
+// produzione e screenshot non lo usano.
+function heavyCount(): number {
+  try {
+    const n = Number(new URLSearchParams(location.search).get("heavy"));
+    return Number.isFinite(n) && n > 0 ? Math.min(2000, Math.floor(n)) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function mulberry32(seed: number) {
+  return () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const HEAVY_WORDS = "boardify appunto rapido idea snippet link colore screenshot nota progetto revisione testo codice".split(" ");
+
+function genHeavyClips(n: number): Clip[] {
+  const rnd = mulberry32(42);
+  const apps = ["firefox", "chrome", "code", "figma", "thunderbird", "slack"];
+  const kinds = ["text", "text", "text", "link", "code", "color", "link", "text", "image"] as const;
+  const out: Clip[] = [];
+  for (let i = 0; i < n; i++) {
+    const kind = kinds[Math.floor(rnd() * kinds.length)];
+    const words = Array.from({ length: 4 + Math.floor(rnd() * 24) }, () => HEAVY_WORDS[Math.floor(rnd() * HEAVY_WORDS.length)]);
+    const stamp = `heavy-${i} ${words.join(" ")}`;
+    const created = new Date(now - Math.floor(rnd() * 9 * 24 * 60) * 60_000).toISOString();
+    const base = {
+      id: `heavy-${i}`,
+      source_app: apps[Math.floor(rnd() * apps.length)],
+      created_at: created,
+      hash: `heavy-${i}`,
+    };
+    if (kind === "link") {
+      const url = `https://example.test/articoli/${i}-${words[0]}`;
+      out.push(clip({ ...base, kind, preview: `${words.slice(0, 6).join(" ")}`, text: url, categories: ["History", "Link"] }));
+    } else if (kind === "code") {
+      const code = `function heavy${i}(${words[0]}: string) {\n  return ${words[1]} ?? "${words[2]}";\n}`;
+      out.push(clip({ ...base, kind, preview: code, text: code, categories: ["History", "Snippet"] }));
+    } else if (kind === "color") {
+      const hex = `#${Math.floor(rnd() * 0xffffff).toString(16).padStart(6, "0").toUpperCase()}`;
+      out.push(clip({ ...base, kind, preview: hex, text: hex, color_hex: hex, categories: ["History", "Colors"] }));
+    } else if (kind === "image") {
+      const art = `data:image/svg+xml;utf8,${encodeURIComponent(demoArtwork)}`;
+      out.push(clip({ ...base, kind, preview: `[Imm heavy ${i}]`, text: art, categories: ["History", "Assets"] }));
+    } else {
+      out.push(clip({ ...base, kind: "text", preview: stamp, categories: ["History"] }));
+    }
+  }
+  return out;
+}
+
+const _heavy = genHeavyClips(heavyCount());
+if (_heavy.length) DEMO_CLIPS.push(..._heavy);
+
 export function isTauri(): boolean {
   return "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
 }
