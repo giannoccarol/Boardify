@@ -452,7 +452,8 @@ fn insert_note(app: tauri::AppHandle, text: String) -> Result<(), String> {
     ingest_clip(&app, &text, "Boardify", "Quick note")
 }
 
-/// Registra la shortcut di apertura shelf (best-effort su Wayland/X11).
+/// Registra la shortcut di apertura shelf (best-effort: su Wayland/X11 il
+/// compositore può intercettarla; su Windows `Super` = tasto Win).
 fn register_shelf_shortcut(app: &tauri::AppHandle, shortcut: &str) -> Result<(), String> {
     use std::str::FromStr;
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -545,6 +546,7 @@ fn shortcuts_on(app: &tauri::AppHandle) -> bool {
         .unwrap_or(true)
 }
 
+#[cfg(target_os = "linux")]
 fn run_color_picker() -> Result<String, String> {
     let tries: &[(&str, &[&str])] = &[
         ("hyprpicker", &["-n"]),
@@ -564,6 +566,19 @@ fn run_color_picker() -> Result<String, String> {
     Err("installa hyprpicker o kcolorchooser".into())
 }
 
+/// Windows: nessun picker esterno agganciato al momento.
+/// Compila e degrada con messaggio chiaro invece di shell-out Linux.
+#[cfg(target_os = "windows")]
+fn run_color_picker() -> Result<String, String> {
+    Err("color picker non ancora supportato su Windows".into())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+fn run_color_picker() -> Result<String, String> {
+    Err("color picker non supportato su questa piattaforma".into())
+}
+
+#[cfg(target_os = "linux")]
 fn ocr_region() -> Result<String, String> {
     let path = db::images_dir().join("screen-ocr.png");
     let grim = std::process::Command::new("sh")
@@ -583,6 +598,18 @@ fn ocr_region() -> Result<String, String> {
         return tesseract(&path);
     }
     Err("serve slurp+grim oppure spectacle, e tesseract".into())
+}
+
+/// Windows: cattura regione non ancora agganciata.
+/// `tesseract` sotto resta cross-platform (se installato e nel PATH).
+#[cfg(target_os = "windows")]
+fn ocr_region() -> Result<String, String> {
+    Err("cattura testo da schermo non ancora supportata su Windows (serve uno strumento di cattura regione + tesseract)".into())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+fn ocr_region() -> Result<String, String> {
+    Err("cattura testo da schermo non supportata su questa piattaforma".into())
 }
 
 fn tesseract(path: &std::path::Path) -> Result<String, String> {
@@ -617,9 +644,10 @@ fn main() {
         seq: Arc::new(Mutex::new(0)),
     };
 
-    // Shortcut globali desiderati (registrazione best-effort su Wayland/X11).
+    // Shortcut globali desiderati (registrazione best-effort: Wayland/X11 e
+    // Windows possono riservare alcune combo a livello di sistema).
     // La shelf usa la stringa configurabile (default Ctrl+Super+V: Ctrl+Shift+V
-    // su Linux è "incolla" nel terminale).
+    // su Linux è "incolla" nel terminale; su Windows Super = tasto Win).
     let library = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyL);
 
     tauri::Builder::default()

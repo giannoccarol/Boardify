@@ -1,4 +1,6 @@
-//! Risolve l'icona Freedesktop di un'app a partire dal process name.
+//! Risolve l'icona di un'app a partire dal process name.
+//! Linux: temi Freedesktop + file `.desktop`. Windows: non ancora risolto
+//! (TODO: estrarre l'icona dall'`.exe`), `resolve_data_url` restituisce `None`.
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -8,6 +10,7 @@ use std::sync::{LazyLock, Mutex};
 
 static CACHE: Mutex<Option<HashMap<String, Option<String>>>> = Mutex::new(None);
 
+#[cfg(target_os = "linux")]
 const THEMES: &[&str] = &[
     "hicolor",
     "Papirus",
@@ -25,6 +28,7 @@ const THEMES: &[&str] = &[
     "CachyOS",
 ];
 
+#[cfg(target_os = "linux")]
 const SIZES: &[&str] = &[
     "48x48", "32x32", "64x64", "128x128", "24x24", "scalable", "48", "32",
 ];
@@ -84,11 +88,14 @@ struct Identity {
     label: String,
     aliases: Vec<String>,
 }
+/// Su Windows `lookup` è uno stub: questi restano per Linux (e per i test puri).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 static IDENTITIES: LazyLock<Vec<Identity>> = LazyLock::new(|| {
     serde_json::from_str(include_str!("../../src/app-identities.json"))
         .expect("valid app identities")
 });
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn aliases(name: &str) -> Vec<String> {
     let mut out = vec![name.to_string()];
     for app in IDENTITIES.iter() {
@@ -111,6 +118,20 @@ fn aliases(name: &str) -> Vec<String> {
 }
 
 fn lookup(name: &str) -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        return linux_lookup(name);
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // TODO(windows): risolvere l'icona dall'eseguibile (estrazione `.exe`).
+        let _ = name;
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_lookup(name: &str) -> Option<PathBuf> {
     let names = aliases(name);
     if let Some(path) = find_from_desktop(&names) {
         return Some(path);
@@ -156,6 +177,7 @@ fn lookup(name: &str) -> Option<PathBuf> {
     None
 }
 
+#[cfg(target_os = "linux")]
 fn existing_with_ext(dir: &Path, name: &str) -> Option<PathBuf> {
     for ext in ["png", "svg", "jpg", "jpeg", "webp"] {
         let p = dir.join(format!("{name}.{ext}"));
@@ -166,6 +188,7 @@ fn existing_with_ext(dir: &Path, name: &str) -> Option<PathBuf> {
     None
 }
 
+#[cfg(target_os = "linux")]
 fn find_from_desktop(names: &[String]) -> Option<PathBuf> {
     let mut dirs = vec![
         PathBuf::from("/usr/share/applications"),
@@ -218,6 +241,8 @@ fn find_from_desktop(names: &[String]) -> Option<PathBuf> {
     None
 }
 
+/// Puro (solo parsing): condiviso così i test girano anche su Windows.
+#[cfg(any(target_os = "linux", test))]
 fn desktop_value(txt: &str, key: &str) -> Option<String> {
     let mut main = false;
     for line in txt.lines().map(str::trim) {
@@ -235,6 +260,7 @@ fn desktop_value(txt: &str, key: &str) -> Option<String> {
     None
 }
 
+#[cfg(target_os = "linux")]
 fn lookup_icon_name(icon: &str) -> Option<PathBuf> {
     let name = [".png", ".svg", ".jpg", ".jpeg", ".webp"]
         .iter()

@@ -20,4 +20,30 @@ Come sviluppare e verificare Boardify senza rompersi.
 - **Suppress-on-copy:** `copy_clip` alza `suppress_once` così il watcher non re-importa ciò che incolliamo noi.
 - **Settings** persistiti con plugin-store (`settings.json`) e applicati al watcher via `apply_watch_settings`.
 - **Wayland:** niente iniezione `Ctrl+V` senza portal → copia + hide, l'utente incolla. Niente comandi privilegiati per sviluppare.
-- **DB locale:** `~/.local/share/boardify/clips.db` (+`images/`). Per azzerare: bottone "Svuota history" o `invoke("clear_history")`.
+- **DB locale:** `~/.local/share/boardify/clips.db` (Linux) / `%APPDATA%\boardify\clips.db` (Windows), +`images/`. Per azzerare: bottone "Svuota history" o `invoke("clear_history")`.
+
+## Windows-compat (obbligatoria per ogni feature)
+
+Boardify compila e gira su Linux E Windows. Regole:
+
+- **Mai codice Unix-only senza fallback.** Niente `std::os::unix`, path assoluti (`/usr/...`), shell-out Linux (`sh`, `hyprctl`, `grim`, `slurp`, `spectacle`, `qdbus`...) nel path condiviso. Pattern obbligatorio:
+  ```rust
+  #[cfg(target_os = "linux")]
+  fn feature_x() -> ... { /* hyprctl/grim/... */ }
+  #[cfg(target_os = "windows")]
+  fn feature_x() -> ... { /* API Windows o Err("... non ancora supportato su Windows") */ }
+  ```
+  Il fallback Windows deve compilare e degradare con messaggio chiaro all'utente, mai panic.
+- **Dipendenze OS-only** solo in `[target.'cfg(target_os = "linux")'.dependencies]` (es. `zbus`). Quelle cross-platform (`arboard`, `active-win-pos-rs`, `dirs`, `image`) restano in `[dependencies]`.
+- **Stato per-OS (dove sta cosa):**
+
+  | Area | Linux | Windows |
+  |---|---|---|
+  | Finestra attiva (`source.rs`) | Hyprland/niri/Sway/KDE/X11 | `active-win-pos-rs` (foreground window), fallback `Unknown` |
+  | Icone app (`icons.rs`) | Freedesktop (temi + `.desktop`) | stub → `None` (TODO: estrarre icone `.exe`) |
+  | Color picker | `hyprpicker`/`kcolorchooser`/`gpick` | non supportato, errore chiaro |
+  | OCR/screenshot testo | `slurp`+`grim` / `spectacle` + `tesseract` | non supportato, errore chiaro (`tesseract` resta cross-platform) |
+  | Watcher clipboard | `arboard` poll 500 ms | stesso codice |
+  | DB / immagini | `dirs::data_dir()` | stesso codice |
+  | Shortcut globali | Tauri `global-shortcut` (`Super` = tasto Win su Windows) | stesso codice, testare la stringa su entrambi |
+- **Verifica:** oltre a `tsc` + `cargo test`, prima di dire "fatto" su codice Rust toccato da OS-specific: `cargo check` e, se il target è installato, `cargo check --target x86_64-pc-windows-msvc`. Niente `#[cfg]` senza aver controllato entrambi i rami (almeno a vista + test della logica pura).

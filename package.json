@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Boardify — clipboard manager visuale, locale e fluidissimo per Linux",
+  "description": "Boardify — clipboard manager visuale, locale e fluidissimo per Linux e Windows",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",

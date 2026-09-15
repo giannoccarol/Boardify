@@ -3,7 +3,7 @@
 </h1>
 
 <p align="center">
-  <strong>Clipboard manager visuale per Linux.</strong><br />
+  <strong>Clipboard manager visuale per Linux e Windows.</strong><br />
   Copi qualcosa, cade dallo shelf in cima. Locale, senza cloud,<br />
   clone spirituale di <a href="https://www.supaste.com/">Supaste</a> — per chi il Mac se lo sogna e il desktop se lo tiene.
 </p>

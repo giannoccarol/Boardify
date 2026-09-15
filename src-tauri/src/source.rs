@@ -1,12 +1,47 @@
-//! Finestra attiva su Linux (Hyprland / niri / Sway / X11 / kdotool).
+//! Finestra attiva: Linux (Hyprland / niri / Sway / X11 / kdotool) e Windows.
+//! Su Windows usa `active-win-pos-rs` (foreground window), con fallback `Unknown`.
 
+#[cfg(any(target_os = "linux", test))]
 use serde_json::Value;
+#[cfg(target_os = "linux")]
 use std::io::Read;
+#[cfg(target_os = "linux")]
 use std::path::Path;
+#[cfg(target_os = "linux")]
 use std::process::{Command, Stdio};
+#[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 
 pub fn active_app() -> (String, String) {
+    #[cfg(target_os = "windows")]
+    {
+        return windows_active();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return linux_active();
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        return ("Unknown".into(), String::new());
+    }
+}
+
+/// Windows: finestra in foreground via crate cross-platform.
+/// Mai vuoto/"unknown" verso il chiamante: fallback `Unknown`.
+#[cfg(target_os = "windows")]
+fn windows_active() -> (String, String) {
+    active_win_pos_rs::get_active_window()
+        .ok()
+        .and_then(|w| {
+            let name = w.process_name.trim().to_string();
+            (!is_unknown(&name)).then_some((name, w.title))
+        })
+        .unwrap_or_else(|| ("Unknown".into(), String::new()))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_active() -> (String, String) {
     // X11's _NET_ACTIVE_WINDOW can keep pointing at Chrome after focus moved
     // to a native Wayland app. Never use that stale value on Wayland.
     let wayland = is_wayland();
@@ -24,6 +59,7 @@ pub fn active_app() -> (String, String) {
     found.unwrap_or_else(|| ("Unknown".into(), String::new()))
 }
 
+#[cfg(target_os = "linux")]
 fn is_wayland() -> bool {
     std::env::var("XDG_SESSION_TYPE").is_ok_and(|s| s.eq_ignore_ascii_case("wayland"))
         || std::env::var_os("WAYLAND_DISPLAY").is_some()
@@ -36,6 +72,7 @@ fn is_unknown(name: &str) -> bool {
     )
 }
 
+#[cfg(target_os = "linux")]
 fn compositor_active() -> Option<(String, String)> {
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
         return hypr_active();
@@ -61,6 +98,7 @@ fn compositor_active() -> Option<(String, String)> {
     kdotool_active()
 }
 
+#[cfg(target_os = "linux")]
 fn hypr_active() -> Option<(String, String)> {
     let v = cmd_json("hyprctl", &["-j", "activewindow"])?;
     let class = v.get("class")?.as_str()?.trim();
@@ -71,6 +109,7 @@ fn hypr_active() -> Option<(String, String)> {
     Some((class.to_string(), title.to_string()))
 }
 
+#[cfg(target_os = "linux")]
 fn niri_active() -> Option<(String, String)> {
     let v = cmd_json("niri", &["msg", "-j", "focused-window"])?;
     let class = v
@@ -85,11 +124,14 @@ fn niri_active() -> Option<(String, String)> {
     Some((class.to_string(), title.to_string()))
 }
 
+#[cfg(target_os = "linux")]
 fn sway_active() -> Option<(String, String)> {
     let v = cmd_json("swaymsg", &["-t", "get_tree"])?;
     find_focused(&v)
 }
 
+/// Puro (solo JSON): condiviso così i test girano anche su Windows.
+#[cfg(any(target_os = "linux", test))]
 fn find_focused(v: &Value) -> Option<(String, String)> {
     if v.get("focused").and_then(|x| x.as_bool()) == Some(true) {
         let app = v
@@ -124,6 +166,7 @@ fn find_focused(v: &Value) -> Option<(String, String)> {
     None
 }
 
+#[cfg(target_os = "linux")]
 fn kdotool_active() -> Option<(String, String)> {
     let id = cmd_stdout("kdotool", &["getactivewindow"])?;
     let class = cmd_stdout("kdotool", &["getwindowclassname", &id])?;
@@ -134,8 +177,10 @@ fn kdotool_active() -> Option<(String, String)> {
     Some((class, title))
 }
 
+#[cfg(target_os = "linux")]
 struct SourceReply(std::sync::mpsc::SyncSender<(String, String)>);
 
+#[cfg(target_os = "linux")]
 #[zbus::interface(name = "com.boardify.Source")]
 impl SourceReply {
     fn report(&self, app: String, title: String) {
@@ -145,10 +190,12 @@ impl SourceReply {
 
 // Unload only our own short-lived query, including on timeout/failure. No
 // focused window metadata is printed to the journal or left in a data file.
+#[cfg(target_os = "linux")]
 struct KwinQuery {
     name: String,
     file: std::path::PathBuf,
 }
+#[cfg(target_os = "linux")]
 impl Drop for KwinQuery {
     fn drop(&mut self) {
         let _ = cmd_stdout_ms(
@@ -165,6 +212,7 @@ impl Drop for KwinQuery {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn kwin_script_active() -> Option<(String, String)> {
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     let connection = zbus::blocking::connection::Builder::session()
@@ -228,6 +276,7 @@ callDBus({destination}, "/Source", "com.boardify.Source", "Report", app, title);
     }
 }
 
+#[cfg(target_os = "linux")]
 fn qdbus_bin() -> &'static str {
     if Path::new("/usr/bin/qdbus6").is_file() {
         "/usr/bin/qdbus6"
@@ -238,6 +287,7 @@ fn qdbus_bin() -> &'static str {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn x11_active() -> Option<(String, String)> {
     if std::env::var_os("DISPLAY").is_none() {
         return None;
@@ -268,15 +318,18 @@ fn x11_active() -> Option<(String, String)> {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn cmd_json(bin: &str, args: &[&str]) -> Option<Value> {
     let out = cmd_stdout(bin, args)?;
     serde_json::from_str(&out).ok()
 }
 
+#[cfg(target_os = "linux")]
 fn cmd_stdout(bin: &str, args: &[&str]) -> Option<String> {
     cmd_stdout_ms(bin, args, 140)
 }
 
+#[cfg(target_os = "linux")]
 fn cmd_stdout_ms(bin: &str, args: &[&str], ms: u64) -> Option<String> {
     let mut child = Command::new(bin)
         .args(args)
@@ -330,6 +383,7 @@ mod tests {
         );
     }
     #[test]
+    #[cfg(target_os = "linux")]
     #[ignore = "requires a running Plasma session; reads app identity only"]
     fn kwin_live_source_query() {
         let source = kwin_script_active().expect("KWin must return the focused app over D-Bus");

@@ -12,6 +12,10 @@ Come restare a 60fps nello shelf e nella library.
 - Immagini: `loading="lazy"`, `draggable={false}`, dimensioni via CSS fissa della card (`clipSizeClass`).
 - Search: debounce 140 ms in store, mai animare sui keystroke.
 
+> Windows-compat: le regole sopra sono OS-agnostic (WebView2 su Windows come WebKit su Linux).
+> Testare gli overlay fullscreen/trasparenti (shelf/capture) anche su Windows: scala DPI diversa
+> e comportamento `transparent`/`alwaysOnTop` possono differire.
+
 ## Checklist nuovo componente animato
 
 1. Parte da uno spring esistente? Se no, motivo.

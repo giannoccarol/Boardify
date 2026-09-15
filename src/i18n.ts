@@ -111,7 +111,7 @@ const en = {
 
   "settings.navLabel": "YOUR SPACE",
   "settings.localLabel": "Your space, local",
-  "settings.version": "Boardify for Linux",
+  "settings.version": "Boardify for Linux & Windows",
   "settings.title": "Settings",
   "settings.footer": "Changes apply automatically",
   "settings.panel.appearance": "Appearance",
@@ -334,7 +334,7 @@ const it: Record<DictKey, string> = {
 
   "settings.navLabel": "IL TUO SPAZIO",
   "settings.localLabel": "Il tuo spazio, in locale",
-  "settings.version": "Boardify per Linux",
+  "settings.version": "Boardify per Linux e Windows",
   "settings.title": "Impostazioni",
   "settings.footer": "Le modifiche si applicano automaticamente",
   "settings.panel.appearance": "Aspetto",

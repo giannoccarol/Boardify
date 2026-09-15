@@ -24,6 +24,9 @@ Tag di ricerca in `src/settings.ts` (`KIND_TAGS`/`CATEGORY_TAGS`, es. `@video`, 
 filtrati in `src/store.ts`; faccette preview in `src/components/ClipPreview.tsx`
 con helper in `src/smartActions.ts`.
 
+> Windows-compat: i matcher in `detect.rs` restano OS-agnostic (solo analisi del testo,
+> mai path/comandi di sistema). Una categoria non dipende mai dall'OS.
+
 ## Checklist: gestiamo una cosa nuova (es. audio, PDF, password)?
 
 1. Aggiungi helper `is_<cosa>` in `detect.rs` + un caso nel test `smart_facets`.
