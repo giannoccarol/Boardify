@@ -24,14 +24,12 @@ export default function BoardifyApp() {
   const view = useBoardify((s) => s.view);
   const setView = useBoardify((s) => s.setView);
   const loadSettings = useBoardify((s) => s.loadSettings);
+  const locale = useBoardify((s) => s.settings.locale);
   const preview = !isTauri();
 
   useEffect(() => {
-    const opaque = view === "library" || view === "settings";
-    const bg = opaque ? "#0c0c0e" : "transparent";
-    document.documentElement.style.background = bg;
-    document.body.style.background = bg;
-  }, [view]);
+    document.documentElement.lang = locale ?? "en";
+  }, [locale]);
 
   useEffect(() => {
     initRealtime();
@@ -53,12 +51,9 @@ export default function BoardifyApp() {
     });
   }, [setView, loadSettings]);
 
-  const stage =
-    view === "library" || view === "settings"
-      ? "bg-[#0c0c0e]"
-      : preview
-        ? "bg-[radial-gradient(120%_80%_at_50%_100%,#c5d46b_0%,#7eb6e8_45%,#9fd4f0_100%)]"
-        : "bg-transparent";
+  const stage = preview
+    ? "bg-[radial-gradient(120%_80%_at_50%_100%,#c5d46b_0%,#7eb6e8_45%,#9fd4f0_100%)]"
+    : "bg-transparent";
 
   if (view === "capture") {
     return (
@@ -70,7 +65,7 @@ export default function BoardifyApp() {
 
   if (view === "settings") {
     return (
-      <div className={`w-screen h-screen p-4 ${stage}`}>
+      <div className={`w-screen h-screen window-stage ${stage}`}>
         <Settings />
       </div>
     );
@@ -79,7 +74,7 @@ export default function BoardifyApp() {
   if (view === "shelf") {
     return (
       <div
-        className={`w-screen h-screen flex items-start justify-center pt-2.5 ${stage}`}
+        className={`shelf-stage nice-scroll w-screen h-screen flex items-start justify-center pt-2.5 ${stage}`}
         onMouseDown={(e) => {
           if (e.target !== e.currentTarget) return;
           dismissShelfBackdrop();
@@ -91,7 +86,7 @@ export default function BoardifyApp() {
   }
 
   return (
-    <div className={`w-screen h-screen p-6 ${stage}`}>
+    <div className={`w-screen h-screen window-stage ${stage}`}>
       <Library />
     </div>
   );

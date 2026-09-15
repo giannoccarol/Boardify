@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { copyInBrowser } from "./clipboard";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Category, Clip } from "./types";
@@ -23,6 +24,7 @@ interface BoardifyState {
   settings: Settings;
   previewId: string | null;
   noteOpen: boolean;
+  copyError: string | null;
 
   setView: (v: View) => void;
   setQuery: (q: string) => void;
@@ -40,7 +42,7 @@ interface BoardifyState {
 
   refresh: () => Promise<void>;
   search: () => Promise<void>;
-  copyClip: (id: string, hide?: boolean) => Promise<void>;
+  copyClip: (id: string, hide?: boolean) => Promise<boolean>;
   toggleFav: (id: string) => Promise<void>;
   togglePin: (id: string) => Promise<void>;
   setShortcut: (id: string, shortcut: string | null) => Promise<void>;
@@ -50,7 +52,7 @@ interface BoardifyState {
   insertNote: (text: string) => Promise<void>;
   openLibrary: () => Promise<void>;
   openSettings: () => Promise<void>;
-  activateClip: (id: string) => Promise<void>;
+  activateClip: (id: string) => Promise<boolean>;
 }
 
 let debounce: ReturnType<typeof setTimeout> | null = null;
@@ -125,6 +127,7 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
   settings: DEFAULT_SETTINGS,
   previewId: null,
   noteOpen: false,
+  copyError: null,
 
   setView: (view) => set({ view }),
   setQuery: (query) => {
@@ -249,14 +252,28 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
   },
 
   copyClip: async (id, hide) => {
-    if (isTauri()) await invoke("copy_clip", { id });
-    set((s) => ({
-      clips: s.clips.map((c) => (c.id === id ? { ...c, copy_count: c.copy_count + 1 } : c)),
-    }));
-    if (hide && isTauri()) {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      await getCurrentWindow().hide();
+    set({ copyError: null });
+    try {
+      if (isTauri()) await invoke("copy_clip", { id });
+      else {
+        const clip = get().clips.find((c) => c.id === id);
+        if (!clip) throw new Error("Clip unavailable");
+        await copyInBrowser(clip);
+      }
+    } catch (error) {
+      set({ copyError: String(error) });
+      return false;
     }
+    if (isTauri()) {
+      // The backend event refreshes counts; incrementing here would race it.
+      if (hide) {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        await getCurrentWindow().hide().catch(() => {});
+      }
+    } else {
+      set((s) => ({ clips: s.clips.map((c) => c.id === id ? { ...c, copy_count: c.copy_count + 1 } : c) }));
+    }
+    return true;
   },
   toggleFav: async (id) => {
     const fav = isTauri()
@@ -352,14 +369,15 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
     const { settings } = get();
     if (settings.clickAction === "select") {
       set({ selectedId: id });
-      return;
+      return false;
     }
-    await get().copyClip(id, settings.clickAction === "copy-hide");
+    return get().copyClip(id, settings.clickAction === "copy-hide");
   },
 }));
 
 export function initRealtime() {
   if (!isTauri()) return;
+  listen<string>("copy-failed", ({ payload }) => useBoardify.setState({ copyError: payload }));
   listen("clips-changed", () => {
     const { query } = useBoardify.getState();
     if (query.trim()) useBoardify.getState().search();

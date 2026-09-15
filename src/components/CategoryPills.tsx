@@ -2,6 +2,7 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { Plus } from "lucide-react";
 import { snappy } from "../motion";
+import { useT } from "../i18n";
 import type { Category } from "../types";
 
 interface Props {
@@ -13,6 +14,7 @@ interface Props {
 }
 
 export function CategoryPills({ categories, active, onSelect, onCreate, layoutId }: Props) {
+  const { t } = useT();
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
 
@@ -32,15 +34,16 @@ export function CategoryPills({ categories, active, onSelect, onCreate, layoutId
   };
 
   return (
-    <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+    <div className="category-pills flex items-center gap-1.5 overflow-x-auto no-scrollbar">
       {pills.map((p) => {
         const isOn = active === p.id;
         return (
           <button
             key={p.id}
+            aria-pressed={isOn}
             onClick={() => onSelect(isOn && p.id !== "all" ? "all" : p.id)}
-            className={`relative shrink-0 flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[12.5px] font-medium
-              ${isOn ? "text-black" : "text-zinc-300 hover:text-white"}`}
+            className={`category-pill relative shrink-0 flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[12.5px] font-medium
+              ${isOn ? "text-black" : "text-zinc-400 hover:text-white bg-white/[0.035]"}`}
           >
             {isOn && (
               <motion.span
@@ -49,8 +52,8 @@ export function CategoryPills({ categories, active, onSelect, onCreate, layoutId
                 transition={snappy}
               />
             )}
-            <span className="relative z-10">{p.name}</span>
-            <span className={`relative z-10 text-[11px] tabular-nums ${isOn ? "text-black/50" : "text-zinc-500"}`}>
+            <span className="relative z-10">{p.id === "all" ? t("pills.history") : p.name}</span>
+            <span className={`pill-count relative z-10 text-[10px] tabular-nums ${isOn ? "text-black/50" : "text-zinc-500"}`}>
               {p.count}
             </span>
           </button>
@@ -69,14 +72,14 @@ export function CategoryPills({ categories, active, onSelect, onCreate, layoutId
               setName("");
             }
           }}
-          placeholder="Nome…"
+          placeholder={t("pills.name")}
           className="w-28 bg-white/[0.08] rounded-full px-3 py-1.5 text-[12.5px] outline-none ring-1 ring-white/15"
         />
       ) : (
         <button
           onClick={() => setAdding(true)}
-          title="Nuova categoria"
-          className="shrink-0 w-7 h-7 rounded-full bg-white/[0.08] hover:bg-white/[0.16] grid place-items-center text-zinc-300 hover:text-white"
+          title={t("pills.new")}
+          className="shrink-0 w-7 h-7 rounded-full bg-white/[0.08] hover:bg-white/[0.16] grid place-items-center text-zinc-400 hover:text-white bg-white/[0.035]"
         >
           <Plus className="w-3.5 h-3.5" />
         </button>

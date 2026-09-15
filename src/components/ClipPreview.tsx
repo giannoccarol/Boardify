@@ -1,24 +1,30 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { motion } from "framer-motion";
-import { Copy, ExternalLink, Link2, X, Pin, Star, QrCode, Mail, Phone, MapPin, FolderOpen } from "lucide-react";
+import { motion, useReducedMotion } from "framer-motion";
+import { Copy, ExternalLink, Link2, X, Pin, Star, QrCode, Mail, Phone, MapPin, FolderOpen, Image as ImageIcon, FileText, Code2, Palette, Clock3, Check } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { Clip } from "../types";
-import { cardTitle } from "../types";
+import { byteSize, imageDimensions, prettyApp, timeAgo } from "../types";
 import { extractUrl, loadLinkMeta, parseMedia, type LinkMeta } from "../linkMeta";
 import { copyPlain, toHtml, toMarkdown, toQrSvg } from "../linkActions";
-import { clipColor, contrastRatio, formatColor, harmonies, wcagBadge } from "../color";
+import { clipColor, contrastRatio, formatColor, harmonies, isDataImage, isSvgMarkup, parseGradientCss, wcagBadge } from "../color";
 import { guessLang } from "../code";
 import { parseUnit } from "../units";
 import { extractEmail, extractFilePath, extractPhone, extractPlaceholders, isAbsolutePath, isDirectVideo, isLikelyAddress, isQrPayload, isVideoUrl, toMapsUrl } from "../smartActions";
 import { useBoardify } from "../store";
 import { isTauri } from "../demo";
-import { spring } from "../motion";
+import { soft } from "../motion";
+import { AppBadge } from "./AppBadge";
+import { useT, type DictKey } from "../i18n";
 
 export function ClipPreview({ clip }: { clip: Clip }) {
   const s = useBoardify();
+  const reduce = useReducedMotion();
+  const [copied, setCopied] = useState(false);
+  const { t, locale } = useT();
   const url = extractUrl(clip.text ?? clip.preview);
   const stillShot = typeof document !== "undefined" && document.documentElement.classList.contains("shot");
-  const [meta, setMeta] = useState<LinkMeta | null>(url ? parseMedia(url) : null);
+  const [loadedMeta, setLoadedMeta] = useState<{ url: string; value: LinkMeta } | null>(null);
+  const meta = loadedMeta?.url === url ? loadedMeta.value : url ? parseMedia(url) : null;
   const [showQr, setShowQr] = useState(false);
   // QR: link oppure payload testuali (WIFI:/otpauth/vCard) che stanno nella categoria QR Code
   const qrTarget = useMemo(() => {
@@ -36,23 +42,27 @@ export function ClipPreview({ clip }: { clip: Clip }) {
     [clip.kind, clip.text, clip.preview]
   );
   const unit = useMemo(
-    () => (clip.kind !== "code" && !url && !colorHex ? parseUnit(clip.text ?? clip.preview) : null),
+    () => (clip.kind !== "code" && !url && !colorHex ? parseUnit(clip.text ?? clip.preview, locale) : null),
     [clip.kind, clip.text, clip.preview, colorHex, url]
   );
 
   useEffect(() => {
-    if (!url) {
-      setMeta(null);
-      return;
-    }
+    if (!url) return;
     let live = true;
     loadLinkMeta(url).then((m) => {
-      if (live) setMeta(m);
+      if (live && m) setLoadedMeta({ url, value: m });
     });
     return () => {
       live = false;
     };
   }, [url]);
+
+  useEffect(() => { setShowQr(false); setCopied(false); }, [clip.id]);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 1200);
+    return () => clearTimeout(timer);
+  }, [copied]);
 
   const openExternal = async (u: string) => {
     if (isTauri()) {
@@ -103,72 +113,83 @@ export function ClipPreview({ clip }: { clip: Clip }) {
     };
   }, [clip.text, clip.preview, url, colorHex, unit]);
 
-  const badge =
+  const badgeKey: DictKey =
     clip.kind === "link"
-      ? (url && isVideoUrl(url) ? "Video" : "Link")
+      ? (url && isVideoUrl(url) ? "badge.video" : "badge.link")
       : clip.kind === "image"
-        ? "Immagine"
+        ? "badge.image"
         : clip.kind === "color" || colorHex
-          ? "Colore"
+          ? "badge.color"
           : clip.kind === "code"
-            ? (lang ? `Codice · ${lang.label}` : "Codice")
+            ? "badge.code"
             : smart.placeholders.length > 0
-              ? "Template"
+              ? "badge.template"
               : smart.email
-                ? "Email"
+                ? "badge.email"
                 : smart.phone
-                  ? "Telefono"
+                  ? "badge.phone"
                   : smart.path
-                    ? "File"
+                    ? "badge.file"
                     : smart.address
-                      ? "Indirizzo"
-                      : unit
-                        ? unit.title
-                        : "Clip";
+                      ? "badge.address"
+                      : "badge.clip";
+
+  const raw = clip.text ?? clip.preview;
+  const dataImage = isDataImage(raw) ? raw.trim() : null;
+  const svgImage = isSvgMarkup(raw) ? `data:image/svg+xml;utf8,${encodeURIComponent(raw.trim())}` : null;
+  const gradient = parseGradientCss(raw);
+  const BadgeIcon = clip.kind === "image" || dataImage || svgImage ? ImageIcon : colorHex || gradient ? Palette : clip.kind === "code" ? Code2 : url ? Link2 : FileText;
+  const dimensions = imageDimensions(clip);
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: -18, scale: 0.98 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: -10, scale: 0.98 }}
-      transition={spring}
-      className="gpu mt-2.5 w-[720px] max-w-[92vw] rounded-[24px] overflow-hidden select-none bg-[#0c0c0e] ring-1 ring-white/[0.10] shadow-[0_28px_80px_rgba(0,0,0,.55)]"
+      initial={reduce ? false : { opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, transition: { duration: 0.08 } }}
+      transition={{ ...soft, opacity: { duration: 0.12 } }}
+      className="glass gpu clip-preview"
+      role="region"
+      aria-label={t("library.preview")}
       onMouseDown={(e) => e.stopPropagation()}
     >
-      <div className="flex items-center gap-2 px-3.5 py-2.5 border-b border-white/[0.06]">
-        <span className="flex items-center gap-1.5 text-[12px] text-zinc-400 px-2 py-1 rounded-full bg-white/[0.06]">
-          <Link2 className="w-3.5 h-3.5" />
-          {badge}
+      <div className="preview-toolbar">
+        <span className="preview-type">
+          <BadgeIcon size={13} />
+          {t(badgeKey)}{clip.kind === "code" && lang ? ` · ${lang.label}` : ""}{badgeKey === "badge.clip" && unit ? ` · ${unit.title}` : ""}
         </span>
-        <div className="ml-auto flex items-center gap-0.5">
-          <Tool title="Copia" onClick={() => s.copyClip(clip.id)}>
-            <Copy className="w-3.5 h-3.5" />
-            <span className="text-[12px] pr-0.5">Copy</span>
+        {dimensions && <span className="preview-info-chip">{dimensions}</span>}
+        <span className="preview-info-chip">{byteSize(clip)}</span>
+        <div className="preview-tools">
+          <Tool title={copied ? t("card.copied") : t("action.copy")} active={copied} onClick={async () => { if (await s.copyClip(clip.id)) setCopied(true); }}>
+            {copied ? <Check size={13} /> : <Copy size={13} />}
+            <span>{copied ? t("card.copied") : t("action.copy")}</span>
           </Tool>
           {url && (
-            <Tool title="Apri nel browser" onClick={open}>
+            <Tool title={t("library.openInBrowser")} onClick={open}>
               <ExternalLink className="w-3.5 h-3.5" />
             </Tool>
           )}
           {qrTarget && (
-            <Tool title="Mostra QR" active={showQr} onClick={() => setShowQr((v) => !v)}>
+            <Tool title={t("library.showQr")} active={showQr} onClick={() => setShowQr((v) => !v)}>
               <QrCode className="w-3.5 h-3.5" />
             </Tool>
           )}
-          <Tool title="Fissa" active={!!clip.is_pinned} onClick={() => s.togglePin(clip.id)}>
+          <Tool title={t("action.pin")} active={!!clip.is_pinned} onClick={() => s.togglePin(clip.id)}>
             <Pin className={`w-3.5 h-3.5 ${clip.is_pinned ? "fill-current" : ""}`} />
           </Tool>
-          <Tool title="Preferito" active={clip.is_favorite} onClick={() => s.toggleFav(clip.id)}>
+          <Tool title={t("action.favorite")} active={clip.is_favorite} onClick={() => s.toggleFav(clip.id)}>
             <Star className={`w-3.5 h-3.5 ${clip.is_favorite ? "fill-current" : ""}`} />
           </Tool>
-          <Tool title="Chiudi" onClick={() => s.setPreview(null)}>
+          <Tool title={t("action.close")} onClick={() => s.setPreview(null)}>
             <X className="w-3.5 h-3.5" />
           </Tool>
         </div>
       </div>
 
+      <div className="preview-scroll nice-scroll">
+      <div className="preview-content-frame">
       {meta?.embed ? (
-        <div className="relative bg-black aspect-video">
+        <div className="preview-media relative bg-black aspect-video">
           {meta.thumbnail && (
             <img src={meta.thumbnail} alt="" className="absolute inset-0 w-full h-full object-cover" />
           )}
@@ -183,44 +204,40 @@ export function ClipPreview({ clip }: { clip: Clip }) {
           )}
         </div>
       ) : url && isDirectVideo(url) ? (
-        <video src={url} controls preload="metadata" className="w-full max-h-[360px] bg-black" />
+        <video src={url} controls preload="metadata" className="preview-media preview-video" />
       ) : clip.kind === "image" && clip.image_path ? (
-        <img src={convertFileSrc(clip.image_path)} alt="" className="w-full max-h-[360px] object-contain bg-black" />
-      ) : colorHex ? (
-        <div className="h-48" style={{ background: colorHex }} />
+        <img src={convertFileSrc(clip.image_path)} alt="" className="preview-media preview-image" />
+      ) : dataImage || svgImage ? (
+        <img src={dataImage ?? svgImage!} alt="" draggable={false} className="preview-media preview-image" />
+      ) : colorHex || gradient ? (
+        <div className="preview-media preview-color" style={{ background: colorHex ?? gradient! }} />
       ) : meta?.thumbnail ? (
-        <button type="button" onClick={open} className="block w-full bg-black">
-          <img src={meta.thumbnail} alt="" className="w-full max-h-[280px] object-cover" />
+        <button type="button" onClick={open} className="preview-thumbnail block w-full bg-black">
+          <img src={meta.thumbnail} alt="" className="preview-media w-full max-h-[280px] object-cover" />
         </button>
       ) : (
-        <pre className="max-h-56 overflow-auto nice-scroll text-[13px] whitespace-pre-wrap break-words px-5 py-4">
+        <pre className={`preview-text nice-scroll ${clip.kind === "code" ? "is-code" : ""}`}>
           {clip.text ?? clip.preview}
         </pre>
       )}
 
-      <div className="px-5 py-4">
-        <p className="text-[15px] font-semibold tracking-tight leading-snug">
-          {meta?.title && meta.title !== meta.host && meta.title !== "YouTube" && meta.title !== "Vimeo"
-            ? meta.title
-            : cardTitle(clip)}
-        </p>
-        {meta?.author && <p className="text-[12.5px] text-zinc-500 mt-0.5">{meta.author}</p>}
-        {clip.kind !== "link" && !meta && (
-          <p className="text-[12.5px] text-zinc-500 mt-1 whitespace-pre-wrap line-clamp-4">{clip.text ?? clip.preview}</p>
-        )}
+      </div>
+      <div className="preview-details">
+        {url && meta?.title && meta.title !== meta.host && meta.title !== "YouTube" && meta.title !== "Vimeo" && <h2 className="preview-title">{meta.title}</h2>}
+        {meta?.author && <p className="preview-author">{meta.author}</p>}
         {url && (
           <button
             type="button"
             onClick={open}
-            className="mt-3 text-[12.5px] text-sky-400 hover:text-sky-300 break-all text-left"
+            className="preview-link"
           >
             {url}
           </button>
         )}
         {url && (
           <div className="mt-3 flex flex-wrap gap-1.5">
-            <MiniBtn label="Copia MD" onClick={() => copyPlain(toMarkdown(url, meta?.title))} />
-            <MiniBtn label="Copia HTML" onClick={() => copyPlain(toHtml(url, meta?.title))} />
+            <MiniBtn label={t("library.copyMd")} onClick={() => copyPlain(toMarkdown(url, meta?.title))} />
+            <MiniBtn label={t("library.copyHtml")} onClick={() => copyPlain(toHtml(url, meta?.title))} />
           </div>
         )}
         {showQr && qrTarget && qrSvg && (
@@ -247,46 +264,53 @@ export function ClipPreview({ clip }: { clip: Clip }) {
           <div className="mt-3 flex flex-wrap gap-1.5">
             {smart.email && (
               <MiniBtn
-                label={`Scrivi a ${smart.email}`}
+                label={t("library.writeTo", { email: smart.email })}
                 icon={<Mail className="w-3 h-3" />}
                 onClick={() => openExternal(`mailto:${smart.email}`)}
               />
             )}
             {smart.phone && (
               <MiniBtn
-                label={`Chiama ${smart.phone}`}
+                label={t("library.call", { phone: smart.phone })}
                 icon={<Phone className="w-3 h-3" />}
                 onClick={() => openExternal(`tel:${smart.phone!.replace(/[\s.()/\-]/g, "")}`)}
               />
             )}
             {smart.address && (
               <MiniBtn
-                label="Apri in Mappe"
+                label={t("library.openInMaps")}
                 icon={<MapPin className="w-3 h-3" />}
                 onClick={() => openExternal(toMapsUrl(clip.text ?? clip.preview ?? ""))}
               />
             )}
             {smart.path && isAbsolutePath(smart.path) && (
               <MiniBtn
-                label="Rivela nel file manager"
+                label={t("library.revealInFiles")}
                 icon={<FolderOpen className="w-3 h-3" />}
                 onClick={() => reveal(smart.path!)}
               />
             )}
             {smart.path && isAbsolutePath(smart.path) && (
-              <MiniBtn label="Apri file" onClick={() => openFile(smart.path!)} />
+              <MiniBtn label={t("library.openFile")} onClick={() => openFile(smart.path!)} />
             )}
             {smart.path && !isAbsolutePath(smart.path) && (
-              <MiniBtn label={`Copia path ${smart.path}`} onClick={() => copyPlain(smart.path!)} />
+              <MiniBtn label={t("library.copyPath", { path: smart.path })} onClick={() => copyPlain(smart.path!)} />
             )}
           </div>
         )}
       </div>
+      </div>
+      <footer className="preview-footer">
+        <span><AppBadge name={clip.source_app} icon={clip.source_icon} size={16} />{prettyApp(clip.source_app)}</span>
+        <span><Clock3 size={11} />{timeAgo(clip.created_at, locale)}</span>
+        <span className="preview-footer-hint"><kbd>Esc</kbd> {t("library.footerClose")}</span>
+      </footer>
     </motion.div>
   );
 }
 
 function ColorDetails({ hex }: { hex: string }) {
+  const { t } = useT();
   const harm = useMemo(() => harmonies(hex), [hex]);
   const cWhite = contrastRatio(hex, "#FFFFFF");
   const cBlack = contrastRatio(hex, "#000000");
@@ -303,7 +327,7 @@ function ColorDetails({ hex }: { hex: string }) {
           <button
             key={c}
             type="button"
-            title={`${c} — clicca per copiare`}
+            title={t("library.copyColorTitle", { c })}
             onClick={() => copyPlain(c)}
             className="h-9 flex-1 rounded-xl ring-1 ring-white/15 hover:ring-white/40"
             style={{ background: c }}
@@ -313,12 +337,12 @@ function ColorDetails({ hex }: { hex: string }) {
       <div className="flex flex-wrap gap-1.5 text-[11px]">
         {cWhite != null && (
           <span className="px-2 py-0.5 rounded-full bg-white/[0.06] text-zinc-300">
-            Su bianco {cWhite}:1 · {wcagBadge(cWhite)}
+            {t("library.onWhite", { ratio: cWhite })} · {wcagBadge(cWhite)}
           </span>
         )}
         {cBlack != null && (
           <span className="px-2 py-0.5 rounded-full bg-white/[0.06] text-zinc-300">
-            Su nero {cBlack}:1 · {wcagBadge(cBlack)}
+            {t("library.onBlack", { ratio: cBlack })} · {wcagBadge(cBlack)}
           </span>
         )}
       </div>
@@ -331,7 +355,7 @@ function MiniBtn({ label, onClick, icon }: { label: string; onClick: () => void;
     <button
       type="button"
       onClick={onClick}
-      className="px-2.5 py-1 rounded-full text-[11.5px] bg-white/[0.06] text-zinc-300 hover:text-white hover:bg-white/[0.12] inline-flex items-center gap-1.5"
+      className="preview-mini-button"
     >
       {icon}
       {label}
@@ -353,10 +377,10 @@ function Tool({
   return (
     <button
       title={title}
+      aria-label={title}
+      aria-pressed={active}
       onClick={onClick}
-      className={`h-8 px-2 rounded-full flex items-center gap-1.5 text-zinc-300 hover:text-white hover:bg-white/[0.08] ${
-        active ? "bg-white text-black hover:bg-white hover:text-black" : ""
-      }`}
+      className={`preview-tool ${active ? "is-active" : ""}`}
     >
       {children}
     </button>

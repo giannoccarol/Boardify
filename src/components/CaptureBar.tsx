@@ -8,12 +8,14 @@ import { AppBadge } from "./AppBadge";
 import { spring } from "../motion";
 import { useBoardify } from "../store";
 import { clipColor } from "../color";
+import { useT } from "../i18n";
 
 export function CaptureBar() {
   const clips = useBoardify((s) => s.clips);
   const toggleFav = useBoardify((s) => s.toggleFav);
   const refresh = useBoardify((s) => s.refresh);
   const [clip, setClip] = useState<Clip | null>(null);
+  const { t } = useT();
 
   useEffect(() => {
     refresh();
@@ -46,15 +48,15 @@ export function CaptureBar() {
       <AppBadge name={clip.source_app} icon={clip.source_icon} size={22} />
       <p className="flex-1 min-w-0 truncate text-[13px] font-medium">{cardTitle(clip)}</p>
       <div className="flex items-center gap-0.5">
-        <Mini icon={<Bell className="w-3.5 h-3.5" />} title="Promemoria (presto)" />
-        <Mini icon={<Folder className="w-3.5 h-3.5" />} title="Categorie" />
+        <Mini icon={<Bell className="w-3.5 h-3.5" />} title={t("capture.reminder")} />
+        <Mini icon={<Folder className="w-3.5 h-3.5" />} title={t("capture.categories")} />
         <Mini
           icon={<Star className={`w-3.5 h-3.5 ${clip.is_favorite ? "fill-current" : ""}`} />}
-          title="Preferito"
+          title={t("capture.favorite")}
           active={clip.is_favorite}
           onClick={() => toggleFav(clip.id)}
         />
-        <Mini icon={<Sparkles className="w-3.5 h-3.5" />} title="Azioni" />
+        <Mini icon={<Sparkles className="w-3.5 h-3.5" />} title={t("capture.actions")} />
       </div>
     </motion.div>
   );
@@ -76,7 +78,7 @@ function Mini({
       title={title}
       onClick={onClick}
       className={`w-8 h-8 rounded-full grid place-items-center ${
-        active ? "bg-amber-400 text-black" : "text-zinc-300 hover:bg-white/10 hover:text-white"
+        active ? "bg-white text-black" : "text-zinc-300 hover:bg-white/10 hover:text-white"
       }`}
     >
       {icon}

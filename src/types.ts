@@ -1,4 +1,6 @@
+import { appIdentity } from "./appIdentity";
 import { parseColorCss } from "./color";
+import type { Locale } from "./settings";
 
 export type ClipKind = "text" | "link" | "code" | "color" | "image" | "file";
 
@@ -31,31 +33,43 @@ export interface Category {
   count: number;
 }
 
-export function timeAgo(iso: string): string {
+export function timeAgo(iso: string, locale: Locale = "en"): string {
   try {
     const d = new Date(iso).getTime();
     const s = Math.max(1, Math.floor((Date.now() - d) / 1000));
-    if (s < 60) return `${s}s fa`;
+    if (locale === "it") {
+      if (s < 60) return `${s}s fa`;
+      const m = Math.floor(s / 60);
+      if (m < 60) return `${m} min fa`;
+      const h = Math.floor(m / 60);
+      if (h < 24) return `${h} h fa`;
+      const g = Math.floor(h / 24);
+      if (g === 1) return "ieri";
+      if (g < 7) return `${g} g fa`;
+      return new Date(iso).toLocaleDateString("it-IT", { day: "numeric", month: "short" });
+    }
+    if (s < 60) return `${s}s ago`;
     const m = Math.floor(s / 60);
-    if (m < 60) return `${m} min fa`;
+    if (m < 60) return `${m} min ago`;
     const h = Math.floor(m / 60);
-    if (h < 24) return `${h} h fa`;
+    if (h < 24) return `${h}h ago`;
     const g = Math.floor(h / 24);
-    if (g === 1) return "ieri";
-    if (g < 7) return `${g} g fa`;
-    return new Date(iso).toLocaleDateString("it-IT", { day: "numeric", month: "short" });
+    if (g === 1) return "yesterday";
+    if (g < 7) return `${g}d ago`;
+    return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
   } catch {
     return "";
   }
 }
 
-export function kindLabel(kind: string): string {
+export function kindLabel(kind: string, locale: Locale = "en"): string {
+  const it = locale === "it";
   switch (kind) {
-    case "text": return "Testo";
+    case "text": return it ? "Testo" : "Text";
     case "link": return "Link";
-    case "code": return "Codice";
-    case "color": return "Colore";
-    case "image": return "Immagine";
+    case "code": return it ? "Codice" : "Code";
+    case "color": return it ? "Colore" : "Color";
+    case "image": return it ? "Immagine" : "Image";
     case "file": return "File";
     default: return kind;
   }
@@ -64,6 +78,8 @@ export function kindLabel(kind: string): string {
 const APP_PALETTE = ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#f97316", "#ec4899"];
 
 export function prettyApp(name: string): string {
+  const identity = appIdentity(name);
+  if (identity) return identity.label;
   const n = (name.split(/[/\\]/).pop() ?? name).replace(/\.(desktop|exe)$/i, "");
   return n.replace(/[-_]+/g, " ").trim() || "App";
 }
@@ -107,23 +123,22 @@ export function imageDimensions(clip: Clip): string | null {
   return m ? `${m[1]} × ${m[2]} px` : null;
 }
 
-export function groupClips(clips: Clip[]): { label: string; items: Clip[] }[] {
+export function groupClips(clips: Clip[], locale: Locale = "en"): { label: string; items: Clip[] }[] {
   const startToday = new Date();
   startToday.setHours(0, 0, 0, 0);
   const startYesterday = new Date(startToday);
   startYesterday.setDate(startYesterday.getDate() - 1);
-  const buckets: { Oggi: Clip[]; Ieri: Clip[]; Precedenti: Clip[] } = {
-    Oggi: [],
-    Ieri: [],
-    Precedenti: [],
-  };
+  const labels = locale === "it"
+    ? (["Oggi", "Ieri", "Precedenti"] as const)
+    : (["Today", "Yesterday", "Earlier"] as const);
+  const buckets: Record<string, Clip[]> = { [labels[0]]: [], [labels[1]]: [], [labels[2]]: [] };
   for (const c of clips) {
     const d = new Date(c.created_at);
-    if (d >= startToday) buckets.Oggi.push(c);
-    else if (d >= startYesterday) buckets.Ieri.push(c);
-    else buckets.Precedenti.push(c);
+    if (d >= startToday) buckets[labels[0]].push(c);
+    else if (d >= startYesterday) buckets[labels[1]].push(c);
+    else buckets[labels[2]].push(c);
   }
-  return (["Oggi", "Ieri", "Precedenti"] as const)
+  return labels
     .filter((k) => buckets[k].length > 0)
     .map((label) => ({ label, items: buckets[label] }));
 }

@@ -4,7 +4,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 
 static CACHE: Mutex<Option<HashMap<String, Option<String>>>> = Mutex::new(None);
 
@@ -67,102 +67,54 @@ fn file_to_data_url(path: &Path) -> Option<String> {
 
 fn normalize(app: &str) -> String {
     let base = Path::new(app.trim())
-        .file_stem()
+        .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or(app)
         .to_lowercase();
-    base.trim_end_matches("-bin")
-        .trim_end_matches(".exe")
-        .trim_end_matches(".desktop")
-        .replace('_', "-")
+    let base = base
+        .strip_suffix(".desktop")
+        .or_else(|| base.strip_suffix(".exe"))
+        .unwrap_or(&base);
+    base.trim_end_matches("-bin").replace(['_', ' '], "-")
 }
+
+#[derive(serde::Deserialize)]
+struct Identity {
+    id: String,
+    label: String,
+    aliases: Vec<String>,
+}
+static IDENTITIES: LazyLock<Vec<Identity>> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("../../src/app-identities.json"))
+        .expect("valid app identities")
+});
 
 fn aliases(name: &str) -> Vec<String> {
     let mut out = vec![name.to_string()];
-    let extra: &[(&str, &[&str])] = &[
-        (
-            "firefox",
-            &[
-                "firefox",
-                "firefox-esr",
-                "org.mozilla.firefox",
-                "firefox-bin",
-                "navigator",
-            ],
-        ),
-        (
-            "chrome",
-            &[
-                "google-chrome",
-                "google-chrome-stable",
-                "chromium",
-                "chromium-browser",
-                "brave-browser",
-                "com.google.Chrome",
-            ],
-        ),
-        ("chromium", &["chromium", "chromium-browser"]),
-        (
-            "code",
-            &[
-                "code",
-                "code-oss",
-                "com.visualstudio.code",
-                "vscodium",
-                "codium",
-                "visual-studio-code",
-            ],
-        ),
-        ("cursor", &["cursor", "co.anysphere.cursor"]),
-        ("slack", &["slack", "com.slack.Slack"]),
-        ("discord", &["discord", "com.discordapp.Discord"]),
-        (
-            "telegram",
-            &["telegram", "telegram-desktop", "org.telegram.desktop"],
-        ),
-        ("figma", &["figma", "io.github.Figma_Linux.figma_linux"]),
-        ("spotify", &["spotify", "com.spotify.Client"]),
-        ("kitty", &["kitty", "kitty-terminal"]),
-        ("ghostty", &["ghostty", "com.mitchellh.ghostty"]),
-        ("alacritty", &["Alacritty", "alacritty"]),
-        ("nautilus", &["org.gnome.Nautilus", "nautilus"]),
-        ("dolphin", &["org.kde.dolphin", "dolphin"]),
-        ("thunar", &["org.xfce.thunar", "thunar"]),
-        ("obsidian", &["obsidian", "md.obsidian.Obsidian"]),
-        ("zen", &["zen-browser", "app.zen_browser.zen", "zen"]),
-        ("librewolf", &["librewolf", "io.gitlab.librewolf-community"]),
-        ("vivaldi", &["vivaldi", "vivaldi-stable"]),
-        ("opera", &["opera"]),
-        ("signal", &["signal", "org.signal.Signal"]),
-        ("element", &["element-desktop", "im.riot.Riot", "element"]),
-        ("steam", &["steam", "com.valvesoftware.Steam"]),
-        ("gimp", &["gimp", "org.gimp.GIMP"]),
-        ("inkscape", &["inkscape", "org.inkscape.Inkscape"]),
-        ("blender", &["blender", "org.blender.Blender"]),
-        ("krita", &["krita", "org.kde.krita"]),
-        ("thunderbird", &["thunderbird", "org.mozilla.Thunderbird"]),
-        ("brave", &["brave-browser", "com.brave.Browser", "brave"]),
-        ("edge", &["microsoft-edge", "com.microsoft.Edge"]),
-        ("arc", &["arc", "company.thebrowser.Browser"]),
-    ];
-    for (k, names) in extra {
-        if name == *k || name.contains(k) || names.iter().any(|n| name == *n) {
-            for n in *names {
-                out.push((*n).to_string());
+    for app in IDENTITIES.iter() {
+        if std::iter::once(&app.id)
+            .chain(std::iter::once(&app.label))
+            .chain(&app.aliases)
+            .any(|alias| normalize(alias) == name)
+        {
+            for alias in std::iter::once(&app.id).chain(&app.aliases) {
+                if !out.contains(alias) {
+                    out.push(alias.clone());
+                }
             }
-            out.push((*k).to_string());
+            break;
         }
     }
-    if name == "navigator" {
-        out.push("firefox".into());
-    }
-    out.sort();
-    out.dedup();
+    // Keep the requested application first. Sorting used to make Brave the
+    // first candidate for Google Chrome; substring matches confused Code/Codex.
     out
 }
 
 fn lookup(name: &str) -> Option<PathBuf> {
     let names = aliases(name);
+    if let Some(path) = find_from_desktop(&names) {
+        return Some(path);
+    }
     let mut roots: Vec<PathBuf> = vec![
         PathBuf::from("/usr/share/icons"),
         PathBuf::from("/usr/share/pixmaps"),
@@ -201,7 +153,7 @@ fn lookup(name: &str) -> Option<PathBuf> {
         }
     }
 
-    find_from_desktop(&names)
+    None
 }
 
 fn existing_with_ext(dir: &Path, name: &str) -> Option<PathBuf> {
@@ -221,10 +173,14 @@ fn find_from_desktop(names: &[String]) -> Option<PathBuf> {
         PathBuf::from("/var/lib/flatpak/exports/share/applications"),
     ];
     if let Some(home) = dirs::home_dir() {
-        dirs.push(home.join(".local/share/applications"));
+        dirs.insert(0, home.join(".local/share/applications"));
+        dirs.push(home.join(".local/share/flatpak/exports/share/applications"));
     }
+    // First resolve exact desktop IDs (including reverse-DNS names), then
+    // StartupWMClass. A partial filename match can select a browser web app.
+    let mut entries = Vec::new();
     for dir in dirs {
-        let Ok(rd) = std::fs::read_dir(&dir) else {
+        let Ok(rd) = std::fs::read_dir(dir) else {
             continue;
         };
         for ent in rd.flatten() {
@@ -232,23 +188,29 @@ fn find_from_desktop(names: &[String]) -> Option<PathBuf> {
             if path.extension().and_then(|s| s.to_str()) != Some("desktop") {
                 continue;
             }
-            let stem = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-            if !names.iter().any(|n| stem == *n || stem.contains(n)) {
-                continue;
+            if let Ok(txt) = std::fs::read_to_string(&path) {
+                entries.push((normalize(path.to_string_lossy().as_ref()), txt));
             }
-            let Ok(txt) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            if let Some(icon) = desktop_icon(&txt) {
-                if Path::new(&icon).is_file() {
-                    return Some(PathBuf::from(icon));
+        }
+    }
+    for by_class in [false, true] {
+        for name in names {
+            for (stem, txt) in &entries {
+                let candidate = if by_class {
+                    desktop_value(txt, "StartupWMClass").map(|v| normalize(&v))
+                } else {
+                    Some(stem.clone())
+                };
+                if candidate.as_deref() != Some(normalize(name).as_str()) {
+                    continue;
                 }
-                if let Some(p) = lookup_icon_name(&icon) {
-                    return Some(p);
+                if let Some(icon) = desktop_value(txt, "Icon") {
+                    if Path::new(&icon).is_file() {
+                        return Some(PathBuf::from(icon));
+                    }
+                    if let Some(p) = lookup_icon_name(&icon) {
+                        return Some(p);
+                    }
                 }
             }
         }
@@ -256,20 +218,27 @@ fn find_from_desktop(names: &[String]) -> Option<PathBuf> {
     None
 }
 
-fn desktop_icon(txt: &str) -> Option<String> {
-    for line in txt.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("Icon=") {
-            return Some(rest.trim().to_string());
+fn desktop_value(txt: &str, key: &str) -> Option<String> {
+    let mut main = false;
+    for line in txt.lines().map(str::trim) {
+        if line.starts_with('[') {
+            main = line == "[Desktop Entry]";
+        }
+        if main {
+            if let Some((k, v)) = line.split_once('=') {
+                if k == key && !v.trim().is_empty() {
+                    return Some(v.trim().to_string());
+                }
+            }
         }
     }
     None
 }
 
 fn lookup_icon_name(icon: &str) -> Option<PathBuf> {
-    let name = Path::new(icon)
-        .file_stem()
-        .and_then(|s| s.to_str())
+    let name = [".png", ".svg", ".jpg", ".jpeg", ".webp"]
+        .iter()
+        .find_map(|ext| icon.strip_suffix(ext))
         .unwrap_or(icon);
     let mut roots = vec![
         PathBuf::from("/usr/share/icons/hicolor"),
@@ -296,4 +265,50 @@ fn lookup_icon_name(icon: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn browsers_never_share_aliases() {
+        let chrome = aliases("google-chrome");
+        assert_eq!(chrome[0], "google-chrome");
+        assert!(!chrome
+            .iter()
+            .any(|s| s.contains("brave") || s.contains("chromium")));
+        assert!(!aliases("brave-browser")
+            .iter()
+            .any(|s| s.contains("chrome")));
+        assert!(!aliases("chromium")
+            .iter()
+            .any(|s| s.contains("google") || s.contains("brave")));
+    }
+    #[test]
+    fn reverse_dns_ids_keep_the_application_segment() {
+        assert_eq!(
+            normalize("org.mozilla.firefox.desktop"),
+            "org.mozilla.firefox"
+        );
+        assert_eq!(normalize("com.google.Chrome"), "com.google.chrome");
+        assert!(aliases("com.google.chrome").contains(&"google-chrome".into()));
+        assert_eq!(normalize("/usr/bin/firefox-bin"), "firefox");
+    }
+    #[test]
+    fn similar_app_names_do_not_match() {
+        assert!(!aliases("codex").contains(&"code".into()));
+        assert_eq!(aliases("my-chrome-webapp"), ["my-chrome-webapp"]);
+    }
+    #[test]
+    fn desktop_action_icon_does_not_override_main_icon() {
+        let entry = "[Desktop Entry]\nIcon=com.google.Chrome\nStartupWMClass=Google-chrome\n[Desktop Action private]\nIcon=other\n";
+        assert_eq!(
+            desktop_value(entry, "Icon").as_deref(),
+            Some("com.google.Chrome")
+        );
+        assert_eq!(
+            desktop_value(entry, "StartupWMClass").as_deref(),
+            Some("Google-chrome")
+        );
+    }
 }

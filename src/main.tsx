@@ -1,6 +1,8 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { MotionConfig } from "framer-motion";
 import App from "./App";
+import { CopyError } from "./components/CopyError";
 import "./styles.css";
 
 const shot = new URLSearchParams(location.search).get("shot");
@@ -28,6 +30,6 @@ if (shot) {
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <App />
+    <MotionConfig reducedMotion="user"><App /><CopyError /></MotionConfig>
   </React.StrictMode>
 );

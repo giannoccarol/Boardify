@@ -21,13 +21,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
 chrono = { version = "0.4", features = ["serde"] }
-arboard = "3"
+arboard = { version = "3", features = ["wayland-data-control"] }
 sha2 = "0.10"
 regex = "1"
 base64 = "0.22"
 dirs = "5"
 image = { version = "0.25", features = ["png", "jpeg"] }
 active-win-pos-rs = "0.7"
+zbus = "5"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
 

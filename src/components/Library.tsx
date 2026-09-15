@@ -1,27 +1,38 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { Search, Star, Trash2, Copy, X, ShieldAlert, Pin, LayoutGrid, List, Columns3, Settings2 } from "lucide-react";
+import { Search, Star, Trash2, Copy, X, ShieldAlert, Pin, LayoutGrid, List, Columns3, Settings2, Clock3, ArrowUpRight } from "lucide-react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useBoardify } from "../store";
 import { ClipCard } from "./ClipCard";
+import { Brand } from "./Brand";
 import { CategoryPills } from "./CategoryPills";
 import { AppBadge } from "./AppBadge";
-import { byteSize, imageDimensions, imageFileUrl, prettyApp, timeAgo } from "../types";
+import { byteSize, groupClips, imageDimensions, imageFileUrl, prettyApp, timeAgo } from "../types";
 import { formatCopy } from "../settings";
 import { isTauri } from "../demo";
 import { snappy, soft } from "../motion";
+import { useT } from "../i18n";
 import { clipColor, isDataImage, isSvgMarkup, parseGradientCss } from "../color";
 import { normalizeShortcut } from "../smartActions";
 
 export function Library() {
   const s = useBoardify();
+  const { t, locale } = useT();
   const reduce = useReducedMotion();
 
   useEffect(() => {
     s.refresh();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") getCurrentWindow().hide();
+      if (e.key === "Enter" && !["INPUT", "TEXTAREA", "BUTTON", "SELECT"].includes((document.activeElement?.tagName ?? ""))) {
+        const state = useBoardify.getState();
+        const id = state.selectedId ?? state.clips[0]?.id;
+        if (id) state.activateClip(id);
+      }
+      if (e.key === "Escape") {
+        if (isTauri()) getCurrentWindow().hide().catch(() => {});
+        else s.setView("shelf");
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -38,34 +49,35 @@ export function Library() {
       initial={reduce ? false : { opacity: 0, scale: 0.98, y: 12 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
       transition={soft}
-      className="glass gpu w-full h-full rounded-[22px] overflow-hidden flex select-none"
+      className="library-window glass gpu w-full h-full overflow-hidden flex select-none"
     >
-      <div className="flex-1 flex flex-col min-w-0">
-        <div className="flex items-center gap-3 px-5 pt-4 pb-2" data-tauri-drag-region>
-          <div className="flex items-center gap-2 w-[260px] bg-white/[0.06] rounded-full px-3.5 py-1.5 ring-1 ring-white/10">
+      <div className="library-main flex-1 flex flex-col min-w-0">
+        <div className="library-toolbar" data-tauri-drag-region>
+          <Brand compact />
+          <div className="library-search">
             <Search className="w-4 h-4 text-zinc-500" />
             <input
               value={s.query}
               onChange={(e) => s.setQuery(e.target.value)}
-              placeholder="Search…  @video  @email  @code"
-              className="bg-transparent outline-none flex-1 text-[13.5px] placeholder:text-zinc-600"
+              placeholder={t("library.searchPlaceholder")} aria-label={t("library.searchAria")}
+              className="bg-transparent outline-none flex-1 min-w-0 text-[12px] placeholder:text-zinc-500"
             />
           </div>
           <div className="ml-auto flex items-center gap-1">
             {(["card", "list", "board"] as const).map((v) => (
               <button
                 key={v}
-                title={v}
+                title={v === "card" ? t("library.viewCard") : v === "list" ? t("library.viewList") : t("library.viewBoard")}
+                aria-pressed={s.settings.libraryView === v}
                 onClick={() => s.patchSettings({ libraryView: v })}
-                className={`w-8 h-8 rounded-full grid place-items-center ${
-                  s.settings.libraryView === v ? "bg-white text-black" : "text-zinc-400 hover:text-white"
-                }`}
+                className={`library-view-button ${s.settings.libraryView === v ? "is-active" : ""}`}
               >
                 {v === "card" ? <LayoutGrid className="w-4 h-4" /> : v === "list" ? <List className="w-4 h-4" /> : <Columns3 className="w-4 h-4" />}
               </button>
             ))}
+            <button title={t("library.closeLibrary")} aria-label={t("library.closeLibrary")} className="icon-button library-close" onClick={() => { if (isTauri()) getCurrentWindow().hide().catch(() => {}); else s.setView("shelf"); }}><X size={16} /></button>
             <button
-              title="Impostazioni"
+              title={t("shelf.settings")}
               onClick={s.openSettings}
               className="w-8 h-8 rounded-full grid place-items-center text-zinc-400 hover:text-white"
             >
@@ -73,8 +85,9 @@ export function Library() {
             </button>
           </div>
         </div>
+        <div className="library-heading"><div><span className="eyebrow">{t("library.eyebrow")}</span><h1>{s.categoryFilter === "all" ? t("library.title") : s.categoryFilter}</h1><p>{t("library.subtitle")}</p></div><span className="library-count">{s.clips.length === 1 ? t("library.countOne") : t("library.count", { count: s.clips.length })}</span></div>
         {s.settings.showCollections && (
-        <div className="px-4 pb-3">
+        <div className="library-collections">
           <CategoryPills
             layoutId="lib-pill"
             categories={s.categories}
@@ -84,13 +97,13 @@ export function Library() {
           />
         </div>
         )}
-        <div className="flex-1 overflow-y-auto nice-scroll px-5 pb-5">
+        <div className="library-clips flex-1 overflow-y-auto nice-scroll">
           {s.settings.libraryView === "board" ? (
             <div className="flex gap-3 overflow-x-auto no-scrollbar h-full items-start">
               {s.categories
                 .filter((c) => c.name !== "History" && c.count > 0)
                 .map((col) => (
-                  <div key={col.id} className="w-[200px] shrink-0">
+                  <div key={col.id} className="library-board-column shrink-0">
                     <p className="text-[12px] font-medium text-zinc-400 mb-2 px-1">
                       {col.name}{" "}
                       <span className="text-zinc-600">{s.clips.filter((c) => c.categories.includes(col.name)).length}</span>
@@ -112,30 +125,28 @@ export function Library() {
               ))}
             </div>
           ) : (
-          <div className="flex flex-wrap gap-3">
-            <AnimatePresence mode="popLayout" initial={false}>
-              {s.clips.map((clip, i) => (
-                <ClipCard
-                  key={clip.id}
-                  clip={clip}
-                  index={i}
-                  selected={clip.id === selected?.id}
-                  variant="grid"
-                />
-              ))}
-            </AnimatePresence>
+          <div className="library-timeline">
+            {groupClips(s.clips).map((group) => <section key={group.label}>
+              <div className="timeline-label"><Clock3 size={12} /><span>{group.label}</span><span>{group.items.length}</span></div>
+              <div className="library-grid">
+                <AnimatePresence mode="popLayout" initial={false}>
+                  {group.items.map((clip, i) => <ClipCard key={clip.id} clip={clip} index={i} selected={clip.id === selected?.id} variant="grid" />)}
+                </AnimatePresence>
+              </div>
+            </section>)}
           </div>
           )}
           {s.clips.length === 0 && (
             <div className="py-20 text-center text-zinc-500">
-              <p className="text-[15px] font-semibold text-zinc-300">Nessun risultato</p>
-              <p className="text-[12.5px] mt-1">Copia qualcosa — comparirà qui in un attimo.</p>
+              <p className="text-[15px] font-semibold text-zinc-300">{t("library.emptyTitle")}</p>
+              <p className="text-[12.5px] mt-1">{t("library.emptyHint")}</p>
             </div>
           )}
         </div>
+        <footer className="library-footer"><span><span className="status-dot" /> {s.settings.autoCapture ? t("library.captureOn") : t("library.captureOff")}</span><span><kbd>{t("kbd.enter")}</kbd> {t("library.footerCopy")} <span className="footer-divider" /> <kbd>Esc</kbd> {t("library.footerClose")}</span></footer>
       </div>
 
-      <div className="w-[312px] shrink-0 border-l border-white/[0.07] bg-[#111113] flex flex-col">
+      <div className="library-inspector shrink-0 flex flex-col">
         <AnimatePresence mode="wait" initial={false}>
           {selected ? (
             <motion.div
@@ -148,26 +159,26 @@ export function Library() {
             >
               <div className="flex items-center gap-2 px-4 py-3">
                 <p className="text-[13px] font-medium text-zinc-300 truncate flex-1">
-                  {selected.categories[0] ?? "History"}
+                  {t("library.preview")}
                 </p>
                 <HeaderIcon
-                  title="Fissa"
+                  title={t("action.pin")}
                   active={!!selected.is_pinned}
                   onClick={() => s.togglePin(selected.id)}
                 >
                   <Pin className={`w-4 h-4 ${selected.is_pinned ? "fill-current" : ""}`} />
                 </HeaderIcon>
                 <HeaderIcon
-                  title="Preferito"
+                  title={t("action.favorite")}
                   active={selected.is_favorite}
                   onClick={() => s.toggleFav(selected.id)}
                 >
                   <Star className={`w-4 h-4 ${selected.is_favorite ? "fill-current" : ""}`} />
                 </HeaderIcon>
-                <HeaderIcon title="Elimina" onClick={() => s.deleteClip(selected.id)}>
+                <HeaderIcon title={t("action.delete")} onClick={() => s.deleteClip(selected.id)}>
                   <Trash2 className="w-4 h-4" />
                 </HeaderIcon>
-                <HeaderIcon title="Chiudi" onClick={() => getCurrentWindow().hide()}>
+                <HeaderIcon title={t("action.close")} onClick={() => { if (isTauri()) getCurrentWindow().hide().catch(() => {}); else s.setView("shelf"); }}>
                   <X className="w-4 h-4" />
                 </HeaderIcon>
               </div>
@@ -218,28 +229,27 @@ export function Library() {
                 )}
               </div>
               <div className="px-5 py-4 space-y-3.5 text-[12.5px] flex-1 overflow-y-auto nice-scroll">
-                <Meta label="Created" value={`${new Date(selected.created_at).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })} · ${timeAgo(selected.created_at)}`} />
+                <Meta label={t("library.metaCreated")} value={`${new Date(selected.created_at).toLocaleString(locale === "it" ? "it-IT" : "en-GB", { dateStyle: "medium", timeStyle: "short" })} · ${timeAgo(selected.created_at, locale)}`} />
                 <div>
-                  <p className="text-zinc-500 uppercase tracking-[0.14em] text-[10px] font-semibold">Source</p>
+                  <p className="text-zinc-500 uppercase tracking-[0.14em] text-[10px] font-semibold">{t("library.metaApp")}</p>
                   <p className="text-zinc-100 mt-1 flex items-center gap-2">
                     <AppBadge name={selected.source_app} icon={selected.source_icon} size={18} />
                     {prettyApp(selected.source_app)}
                   </p>
                 </div>
                 {imageDimensions(selected) && (
-                  <Meta label="Dimensions" value={imageDimensions(selected)!} />
+                  <Meta label={t("library.metaDims")} value={imageDimensions(selected)!} />
                 )}
-                <Meta label="Details" value={byteSize(selected)} />
-                <SnippetRow key={`snip-${selected.id}`} clipId={selected.id} current={selected.inline_shortcut ?? null} />
-                {selected.is_sensitive && (
+                <Meta label={t("library.metaDetails")} value={byteSize(selected)} />
+                <SnippetRow key={`snip-${selected.id}`} clipId={selected.id} current={selected.inline_shortcut ?? null} />                {selected.is_sensitive && (
                   <p className="flex items-center gap-1.5 text-amber-400 text-[12px]">
-                    <ShieldAlert className="w-3.5 h-3.5" /> Contenuto sensibile
+                    <ShieldAlert className="w-3.5 h-3.5" /> {t("library.sensitive")}
                   </p>
                 )}
                 {s.categories.filter((c) => c.name !== "History").length > 0 && (
                   <div>
                     <p className="text-zinc-500 uppercase tracking-[0.14em] text-[10px] font-semibold mb-1.5">
-                      Categorie
+                      {t("library.categories")}
                     </p>
                     <div className="flex flex-wrap gap-1.5">
                       {s.categories
@@ -291,9 +301,9 @@ export function Library() {
                 <motion.button
                   whileTap={{ scale: 0.97 }}
                   onClick={() => s.copyClip(selected.id)}
-                  className="w-full flex items-center justify-center gap-2 bg-white text-black font-semibold rounded-2xl py-2.5 text-[13.5px] hover:bg-zinc-200"
+                  className="primary-copy-button"
                 >
-                  <Copy className="w-4 h-4" /> Copy to clipboard
+                  <Copy className="w-4 h-4" /> {t("library.copyToClipboard")} <ArrowUpRight size={14} />
                 </motion.button>
               </div>
             </motion.div>
@@ -304,7 +314,7 @@ export function Library() {
               animate={{ opacity: 1 }}
               className="m-auto text-zinc-600 text-[13px]"
             >
-              Seleziona un clip
+              {t("library.selectClip")}
             </motion.div>
           )}
         </AnimatePresence>
@@ -315,6 +325,7 @@ export function Library() {
 
 function SnippetRow({ clipId, current }: { clipId: string; current: string | null }) {
   const s = useBoardify();
+  const { t, locale } = useT();
   const [val, setVal] = useState(current ?? "");
   const [err, setErr] = useState(false);
   const save = async () => {
@@ -335,21 +346,21 @@ function SnippetRow({ clipId, current }: { clipId: string; current: string | nul
   };
   return (
     <div>
-      <p className="text-zinc-500 uppercase tracking-[0.14em] text-[10px] font-semibold">Snippet</p>
+      <p className="text-zinc-500 uppercase tracking-[0.14em] text-[10px] font-semibold">{t("library.snippet")}</p>
       <div className="mt-1 flex items-center gap-1.5">
         <input
           value={val}
           onChange={(e) => { setVal(e.target.value); setErr(false); }}
           onKeyDown={(e) => { if (e.key === "Enter") save(); }}
           onBlur={save}
-          placeholder=";nome — Invio per salvare"
+          placeholder={t("library.snippetPlaceholder")}
           spellCheck={false}
           className={`flex-1 min-w-0 bg-white/[0.05] rounded-xl px-2.5 py-1.5 font-mono text-[12px] text-zinc-100 placeholder:text-zinc-600 outline-none ring-1 ${err ? "ring-red-500/60" : "ring-white/10 focus:ring-white/25"}`}
         />
         {current && (
           <button
             type="button"
-            title="Rimuovi scorciatoia"
+            title={t("library.snippetRemove")}
             onClick={() => { setVal(""); s.setShortcut(clipId, null); }}
             className="w-7 h-7 shrink-0 rounded-full grid place-items-center text-zinc-500 hover:text-white hover:bg-white/10"
           >
@@ -358,7 +369,7 @@ function SnippetRow({ clipId, current }: { clipId: string; current: string | nul
         )}
       </div>
       <p className="text-zinc-600 text-[11px] mt-1">
-        Richiama con <span className="font-mono text-zinc-400">;nome</span> nello shelf + Invio
+        {t("library.snippetHintPre")} <span className="font-mono text-zinc-400">{locale === "it" ? ";nome" : ";name"}</span> {t("library.snippetHintPost")}
       </p>
     </div>
   );
@@ -389,7 +400,7 @@ function HeaderIcon({
       title={title}
       onClick={onClick}
       className={`w-8 h-8 rounded-full grid place-items-center ${
-        active ? "bg-amber-400 text-black" : "text-zinc-400 hover:text-white hover:bg-white/10"
+        active ? "bg-white text-black" : "text-zinc-400 hover:text-white hover:bg-white/10"
       }`}
     >
       {children}

@@ -1,6 +1,7 @@
 export type ClipSize = "sm" | "md" | "lg";
 export type ClickAction = "copy-hide" | "copy" | "select";
 export type LibraryView = "card" | "list" | "board";
+export type Locale = "en" | "it";
 
 export interface Settings {
   clipSize: ClipSize;
@@ -15,6 +16,7 @@ export interface Settings {
   ignoredApps: string;
   shortcutsEnabled: boolean;
   shelfShortcut: string;
+  locale: Locale;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -30,16 +32,10 @@ export const DEFAULT_SETTINGS: Settings = {
   ignoredApps: "",
   shortcutsEnabled: true,
   shelfShortcut: "Ctrl+Super+V",
+  locale: "en",
 };
 
-export const KINDS = [
-  { id: "all", label: "Tutti" },
-  { id: "text", label: "Testo" },
-  { id: "link", label: "Link" },
-  { id: "code", label: "Codice" },
-  { id: "color", label: "Colori" },
-  { id: "image", label: "Immagini" },
-];
+export const KIND_IDS = ["all", "text", "link", "code", "color", "image"] as const;
 
 // Tag @tipo: alias kind (vecchi + snippet/colors/assets) e faccette smart
 // (video/email/template/qrcode) che filtrano per categoria DB.
@@ -101,13 +97,13 @@ export function formatCopy(text: string, mode: "upper" | "lower" | "cap" | "plai
 
 export function clipSizeClass(size: ClipSize, variant: "shelf" | "grid"): string {
   if (variant === "grid") {
-    if (size === "sm") return "w-[128px] h-[112px]";
-    if (size === "lg") return "w-[180px] h-[156px]";
-    return "w-[152px] h-[132px]";
+    if (size === "sm") return "w-[144px] h-[128px]";
+    if (size === "lg") return "w-[204px] h-[182px]";
+    return "w-[176px] h-[158px]";
   }
   if (size === "sm") return "w-[132px] h-[96px]";
   if (size === "lg") return "w-[220px] h-[156px]";
-  return "w-[176px] h-[124px]";
+  return "w-[184px] h-[138px]";
 }
 
 export function shelfHeight(size: ClipSize): number {

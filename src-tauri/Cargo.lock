@@ -517,6 +517,7 @@ dependencies = [
  "tauri-plugin-store",
  "tokio",
  "uuid",
+ "zbus",
 ]
 
 [[package]]

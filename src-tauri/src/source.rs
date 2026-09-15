@@ -7,17 +7,33 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 pub fn active_app() -> (String, String) {
-    if let Ok(w) = active_win_pos_rs::get_active_window() {
-        let name = w.process_name.trim().to_string();
-        if !name.is_empty() && !is_unknown(&name) {
-            return (name, w.title);
-        }
-    }
-    compositor_active().unwrap_or_else(|| ("Unknown".into(), String::new()))
+    // X11's _NET_ACTIVE_WINDOW can keep pointing at Chrome after focus moved
+    // to a native Wayland app. Never use that stale value on Wayland.
+    let wayland = is_wayland();
+    let found = if wayland {
+        compositor_active()
+    } else {
+        active_win_pos_rs::get_active_window()
+            .ok()
+            .and_then(|w| {
+                let name = w.process_name.trim().to_string();
+                (!is_unknown(&name)).then_some((name, w.title))
+            })
+            .or_else(x11_active)
+    };
+    found.unwrap_or_else(|| ("Unknown".into(), String::new()))
+}
+
+fn is_wayland() -> bool {
+    std::env::var("XDG_SESSION_TYPE").is_ok_and(|s| s.eq_ignore_ascii_case("wayland"))
+        || std::env::var_os("WAYLAND_DISPLAY").is_some()
 }
 
 fn is_unknown(name: &str) -> bool {
-    matches!(name.to_lowercase().as_str(), "unknown" | "n/a" | "none" | "")
+    matches!(
+        name.to_lowercase().as_str(),
+        "unknown" | "n/a" | "none" | ""
+    )
 }
 
 fn compositor_active() -> Option<(String, String)> {
@@ -34,7 +50,7 @@ fn compositor_active() -> Option<(String, String)> {
         .unwrap_or_default()
         .to_uppercase();
     if desktop.contains("KDE") || desktop.contains("PLASMA") {
-        return kdotool_active().or_else(kwin_script_active);
+        return kwin_script_active().or_else(kdotool_active);
     }
     if desktop.contains("HYPR") {
         return hypr_active();
@@ -42,7 +58,7 @@ fn compositor_active() -> Option<(String, String)> {
     if desktop.contains("NIRI") {
         return niri_active();
     }
-    kdotool_active().or_else(x11_active)
+    kdotool_active()
 }
 
 fn hypr_active() -> Option<(String, String)> {
@@ -87,7 +103,11 @@ fn find_focused(v: &Value) -> Option<(String, String)> {
             })
             .unwrap_or("")
             .to_string();
-        let title = v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let title = v
+            .get("name")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
         if !app.is_empty() {
             return Some((app, title));
         }
@@ -105,107 +125,107 @@ fn find_focused(v: &Value) -> Option<(String, String)> {
 }
 
 fn kdotool_active() -> Option<(String, String)> {
-    let class = cmd_stdout("kdotool", &["getactivewindow", "getwindowclassname"])?;
+    let id = cmd_stdout("kdotool", &["getactivewindow"])?;
+    let class = cmd_stdout("kdotool", &["getwindowclassname", &id])?;
     if class.is_empty() || is_unknown(&class) {
         return None;
     }
-    let title = cmd_stdout("kdotool", &["getactivewindow", "getwindowname"]).unwrap_or_default();
+    let title = cmd_stdout("kdotool", &["getwindowname", &id]).unwrap_or_default();
     Some((class, title))
 }
 
+struct SourceReply(std::sync::mpsc::SyncSender<(String, String)>);
+
+#[zbus::interface(name = "com.boardify.Source")]
+impl SourceReply {
+    fn report(&self, app: String, title: String) {
+        let _ = self.0.try_send((app, title));
+    }
+}
+
+// Unload only our own short-lived query, including on timeout/failure. No
+// focused window metadata is printed to the journal or left in a data file.
+struct KwinQuery {
+    name: String,
+    file: std::path::PathBuf,
+}
+impl Drop for KwinQuery {
+    fn drop(&mut self) {
+        let _ = cmd_stdout_ms(
+            qdbus_bin(),
+            &[
+                "org.kde.KWin",
+                "/Scripting",
+                "org.kde.kwin.Scripting.unloadScript",
+                &self.name,
+            ],
+            300,
+        );
+        let _ = std::fs::remove_file(&self.file);
+    }
+}
+
 fn kwin_script_active() -> Option<(String, String)> {
-    let token = format!(
-        "{:x}{:x}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?
-            .as_millis()
-    );
-    let dir = dirs::data_dir()?.join("boardify");
-    std::fs::create_dir_all(&dir).ok()?;
-    let js_path = dir.join("kwin-active.js");
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let connection = zbus::blocking::connection::Builder::session()
+        .ok()?
+        .method_timeout(Duration::from_millis(400))
+        .serve_at("/Source", SourceReply(tx))
+        .ok()?
+        .build()
+        .ok()?;
+    let destination = serde_json::to_string(connection.unique_name()?.as_str()).ok()?;
+    let name = format!("boardify-source-{}", uuid::Uuid::new_v4());
+    let query = KwinQuery {
+        file: std::env::temp_dir().join(format!("{name}.js")),
+        name,
+    };
     let js = format!(
-        r#"var w = workspace.activeWindow;
-var klass = w && w.resourceClass ? w.resourceClass.toString() : "";
-var title = w && w.caption ? w.caption.toString() : "";
-print("BOARDIFY_SRC|{token}|" + klass + "|" + title);
+        r#"var w = workspace.activeWindow || workspace.activeClient;
+var app = w ? (w.desktopFileName || w.resourceClass || "").toString() : "";
+var title = w ? (w.caption || "").toString() : "";
+callDBus({destination}, "/Source", "com.boardify.Source", "Report", app, title);
 "#
     );
-    std::fs::write(&js_path, js).ok()?;
-    let js_str = js_path.to_string_lossy();
-    let qdbus = qdbus_bin();
-    let _ = cmd_stdout_ms(
-        qdbus,
-        &[
-            "org.kde.KWin",
-            "/Scripting",
-            "org.kde.kwin.Scripting.unloadScript",
-            "boardify-active",
-        ],
-        200,
-    );
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&query.file)
+            .ok()?;
+        file.write_all(js.as_bytes()).ok()?;
+    }
     let id = cmd_stdout_ms(
-        qdbus,
+        qdbus_bin(),
         &[
             "org.kde.KWin",
             "/Scripting",
             "org.kde.kwin.Scripting.loadScript",
-            js_str.as_ref(),
-            "boardify-active",
+            query.file.to_str()?,
+            &query.name,
         ],
-        250,
-    )?;
-    let id = id.trim();
-    if id.is_empty() {
-        return None;
-    }
-    let path = format!("/Scripting/Script{id}");
-    let _ = cmd_stdout_ms(
-        qdbus,
+        400,
+    )?
+    .parse::<u32>()
+    .ok()?;
+    cmd_stdout_ms(
+        qdbus_bin(),
         &[
             "org.kde.KWin",
-            &path,
+            &format!("/Scripting/Script{id}"),
             "org.kde.kwin.Script.run",
         ],
-        250,
-    );
-    let marker = format!("BOARDIFY_SRC|{token}|");
-    for _ in 0..12 {
-        std::thread::sleep(Duration::from_millis(20));
-        if let Some(hit) = journal_boardify(&marker) {
-            return Some(hit);
-        }
-    }
-    None
-}
-
-fn journal_boardify(marker: &str) -> Option<(String, String)> {
-    let out = cmd_stdout_ms(
-        "journalctl",
-        &[
-            "--user",
-            "--no-pager",
-            "-n",
-            "40",
-            "-o",
-            "cat",
-            "--since",
-            "20 seconds ago",
-        ],
-        220,
+        400,
     )?;
-    for line in out.lines().rev() {
-        if let Some(rest) = line.split(marker).nth(1) {
-            let mut parts = rest.splitn(2, '|');
-            let class = parts.next().unwrap_or("").trim();
-            let title = parts.next().unwrap_or("").trim();
-            if !class.is_empty() && !is_unknown(class) {
-                return Some((class.to_string(), title.to_string()));
-            }
-        }
+    let (app, title) = rx.recv_timeout(Duration::from_millis(400)).ok()?;
+    if is_unknown(app.trim()) {
+        None
+    } else {
+        Some((app.trim().to_string(), title))
     }
-    None
 }
 
 fn qdbus_bin() -> &'static str {
@@ -264,6 +284,13 @@ fn cmd_stdout_ms(bin: &str, args: &[&str], ms: u64) -> Option<String> {
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
+    // Drain while the process runs: a large Sway tree must not fill the pipe
+    // and deadlock before try_wait reports completion.
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut buf = String::new();
+        stdout.read_to_string(&mut buf).map(|_| buf)
+    });
     let start = Instant::now();
     loop {
         match child.try_wait() {
@@ -271,16 +298,42 @@ fn cmd_stdout_ms(bin: &str, args: &[&str], ms: u64) -> Option<String> {
                 if !status.success() {
                     return None;
                 }
-                let mut buf = String::new();
-                child.stdout.take()?.read_to_string(&mut buf).ok()?;
+                let buf = reader.join().ok()?.ok()?;
                 return Some(buf.trim().to_string());
             }
             Ok(None) if start.elapsed() > Duration::from_millis(ms) => {
                 let _ = child.kill();
+                let _ = child.wait();
                 return None;
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(6)),
             Err(_) => return None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn sway_prefers_focused_native_app_and_handles_floating_xwayland_windows() {
+        let tree = serde_json::json!({"nodes": [{"app_id": "google-chrome", "focused": false}],
+            "floating_nodes": [{"focused": true, "app_id": "org.kde.dolphin", "name": "Files"}]});
+        assert_eq!(
+            find_focused(&tree),
+            Some(("org.kde.dolphin".into(), "Files".into()))
+        );
+        let xwayland = serde_json::json!({"focused": true, "window_properties": {"class": "Brave-browser"}, "name": "Page"});
+        assert_eq!(
+            find_focused(&xwayland),
+            Some(("Brave-browser".into(), "Page".into()))
+        );
+    }
+    #[test]
+    #[ignore = "requires a running Plasma session; reads app identity only"]
+    fn kwin_live_source_query() {
+        let source = kwin_script_active().expect("KWin must return the focused app over D-Bus");
+        assert!(!is_unknown(&source.0));
+        // Do not print the user's window title in test output.
     }
 }

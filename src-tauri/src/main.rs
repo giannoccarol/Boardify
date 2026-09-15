@@ -1,6 +1,7 @@
 //! Boardify — backend Rust: clipboard watcher, SQLite FTS, comandi Tauri.
 //! Local-first, privacy-first. Nessun network.
 
+mod clipboard;
 mod db;
 mod detect;
 mod icons;
@@ -23,8 +24,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 pub struct AppState {
     pub db: Arc<Mutex<Db>>,
     pub last_hash: Arc<Mutex<String>>,
-    pub last_seen: Arc<Mutex<String>>,
-    pub suppress_once: Arc<Mutex<bool>>,
+    pub clipboard_gate: Mutex<()>,
     pub watch: Arc<Mutex<WatchSettings>>,
     pub seq: Arc<Mutex<usize>>,
 }
@@ -166,45 +166,34 @@ fn clear_history(state: State<AppState>, app: tauri::AppHandle) -> Result<(), St
     Ok(())
 }
 
-#[tauri::command]
-fn copy_clip(state: State<AppState>, app: tauri::AppHandle, id: String) -> Result<(), String> {
+fn write_clip(app: &tauri::AppHandle, row: &ClipRow) -> Result<(), String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
-    let clip: Clip = {
-        let db = state.db.lock().map_err(|e| e.to_string())?;
-        let row = db.get(&id).map_err(|e| e.to_string())?.ok_or("clip non trovata")?;
-        row.into()
-    };
-    // Evita che il watcher re-importi ciò che incolliamo noi;
-    // last_hash = hash del clip così il giro successivo lo vede come duplicato.
-    *state.suppress_once.lock().map_err(|e| e.to_string())? = true;
-    *state.last_hash.lock().map_err(|e| e.to_string())? = clip.hash.clone();
-    if let Some(img) = &clip.image_path {
-        let raw = img.strip_prefix("asset://localhost/").unwrap_or(img);
-        match image::open(raw).map(|i| i.to_rgba8()) {
-            Ok(rgba) => {
-                let (w, h) = (rgba.width(), rgba.height());
-                let image = tauri::image::Image::new_owned(rgba.into_raw(), w, h);
-                app.clipboard().write_image(&image).map_err(|e| e.to_string())?
-            }
-            Err(_) if clip.text.is_some() => app
-                .clipboard()
-                .write_text(clip.text.clone().unwrap())
-                .map_err(|e| e.to_string())?,
-            Err(e) => return Err(format!("immagine non leggibile: {e}")),
+    let content = clipboard::content(row)?;
+    let state = app.state::<AppState>();
+    let _gate = state.clipboard_gate.lock().map_err(|e| e.to_string())?;
+    let mut last_hash = state.last_hash.lock().map_err(|e| e.to_string())?;
+    match &content {
+        watcher::Snapshot::Image(img) => {
+            let image = tauri::image::Image::new(img.bytes.as_ref(), img.width as u32, img.height as u32);
+            app.clipboard().write_image(&image).map_err(|e| e.to_string())?;
         }
-    } else if let Some(t) = &clip.text {
-        app.clipboard().write_text(t.clone()).map_err(|e| e.to_string())?;
+        watcher::Snapshot::Text(text) => app.clipboard().write_text(text.clone()).map_err(|e| e.to_string())?,
     }
-    {
-        let db = state.db.lock().map_err(|e| e.to_string())?;
-        db.bump_copy(&id).map_err(|e| e.to_string())?;
-    }
-    // Nascondi shelf e simula incolla? Su Wayland non possiamo iniettare tasti
-    // senza portal; lasciamo l'utente premere Ctrl+V (notifica subtle).
-    if let Some(w) = app.get_webview_window("shelf") {
-        let _ = w.hide();
-    }
+    // Suppress exactly our successful write, never the user's next clipboard.
+    *last_hash = content.hash();
+    drop(last_hash);
+    state.db.lock().map_err(|e| e.to_string())?.bump_copy(&row.id).map_err(|e| e.to_string())?;
+    let _ = app.emit("clips-changed", ());
     Ok(())
+}
+
+#[tauri::command]
+async fn copy_clip(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let row = app.state::<AppState>().db.lock().map_err(|e| e.to_string())?
+            .get(&id).map_err(|e| e.to_string())?.ok_or("clip non trovata")?;
+        write_clip(&app, &row)
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -221,7 +210,7 @@ fn combine_clips(state: State<AppState>, app: tauri::AppHandle, ids: Vec<String>
     }
     drop(db);
     let combined = parts.join("\n\n— — —\n\n");
-    *state.suppress_once.lock().map_err(|e| e.to_string())? = true;
+    let _gate = state.clipboard_gate.lock().map_err(|e| e.to_string())?;
     app.clipboard().write_text(combined.clone()).map_err(|e| e.to_string())?;
     let mut last_hash = state.last_hash.lock().map_err(|e| e.to_string())?;
     let clip = watcher::ingest_text(
@@ -501,11 +490,9 @@ fn capture_screen_text(app: tauri::AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn capture_now(app: tauri::AppHandle) -> Result<(), String> {
-    use arboard::Clipboard;
-    let mut cb = Clipboard::new().map_err(|e| e.to_string())?;
-    let text = cb.get_text().map_err(|e| e.to_string())?;
-    ingest_clip(&app, &text, "Boardify", "Manual capture")
+async fn capture_now(app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || watcher::capture_now(&app))
+        .await.map_err(|e| e.to_string())?
 }
 
 fn shortcuts_on(app: &tauri::AppHandle) -> bool {
@@ -566,34 +553,16 @@ fn tesseract(path: &std::path::Path) -> Result<String, String> {
 
 /// Incolla l'n-esimo clip recente (0-9) senza aprire UI.
 fn paste_recent(app: &tauri::AppHandle, index: usize) {
-    use tauri_plugin_clipboard_manager::ClipboardExt;
-    let state: State<AppState> = app.state();
-    let rows = state
-        .db
-        .lock()
-        .ok()
-        .and_then(|db| db.list(10, None, None, false).ok())
-        .unwrap_or_default();
-    if let Some(row) = rows.get(index) {
-        *state.suppress_once.lock().unwrap_or_else(|e| e.into_inner()) = true;
-        *state.last_hash.lock().unwrap_or_else(|e| e.into_inner()) = row.hash.clone();
-        if let Some(p) = &row.image_path {
-            let raw = p.strip_prefix("asset://localhost/").unwrap_or(p);
-            if let Ok(rgba) = image::open(raw).map(|i| i.to_rgba8()) {
-                let (w, h) = (rgba.width(), rgba.height());
-                let image = tauri::image::Image::new_owned(rgba.into_raw(), w, h);
-                let _ = app.clipboard().write_image(&image);
-            } else if let Some(t) = &row.text {
-                let _ = app.clipboard().write_text(t.clone());
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let rows = state.db.lock().ok().and_then(|db| db.list(10, None, None, false).ok()).unwrap_or_default();
+        if let Some(row) = rows.get(index) {
+            if let Err(error) = write_clip(&app, row) {
+                let _ = app.emit("copy-failed", error);
             }
-        } else if let Some(t) = &row.text {
-            let _ = app.clipboard().write_text(t.clone());
         }
-        if let Ok(db) = state.db.lock() {
-            let _ = db.bump_copy(&row.id);
-        }
-        let _ = app.emit("clips-changed", ());
-    }
+    });
 }
 
 fn main() {
@@ -601,8 +570,7 @@ fn main() {
     let state = AppState {
         db: Arc::new(Mutex::new(db)),
         last_hash: Arc::new(Mutex::new(String::new())),
-        last_seen: Arc::new(Mutex::new(String::new())),
-        suppress_once: Arc::new(Mutex::new(false)),
+        clipboard_gate: Mutex::new(()),
         watch: Arc::new(Mutex::new(WatchSettings::default())),
         seq: Arc::new(Mutex::new(0)),
     };
@@ -670,7 +638,8 @@ fn main() {
             });
             let _ = handle.on_shortcut(cap_sc, |app, _s, ev| {
                 if ev.state == ShortcutState::Pressed && shortcuts_on(app) {
-                    let _ = capture_now(app.clone());
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move { let _ = capture_now(app).await; });
                 }
             });
             let _ = handle.on_shortcut(color_sc, |app, _s, ev| {

@@ -51,6 +51,13 @@ pub fn images_dir() -> PathBuf {
 }
 
 impl Db {
+    #[cfg(test)]
+    pub fn in_memory() -> SqlResult<Self> {
+        let db = Self { conn: Connection::open_in_memory()? };
+        db.migrate()?;
+        Ok(db)
+    }
+
     pub fn open() -> SqlResult<Self> {
         let path = data_dir().join("clips.db");
         let conn = Connection::open(path)?;
@@ -246,12 +253,16 @@ impl Db {
                 .conn
                 .query_row("SELECT id FROM clips ORDER BY created_at DESC LIMIT 1", [], |r| r.get(0))
                 .ok();
-            if newest.as_ref() == Some(&existing.id) {
+            if newest.as_ref() == Some(&existing.id) && existing.source_app == source_app && existing.window_title == window_title
+                && image_path.is_none_or(|p| existing.image_path.as_deref() == Some(p)) {
                 return Ok((self.get(&existing.id)?.unwrap(), false));
             }
             self.conn.execute(
-                "UPDATE clips SET copy_count = copy_count + 1, created_at = ?1 WHERE id = ?2",
-                params![Utc::now().to_rfc3339(), existing.id],
+                "UPDATE clips SET copy_count = copy_count + 1, created_at = ?1,
+                 source_app = CASE WHEN ?3 != 'Unknown' THEN ?3 ELSE source_app END,
+                 window_title = CASE WHEN ?3 != 'Unknown' THEN ?4 ELSE window_title END,
+                 image_path = COALESCE(?5, image_path) WHERE id = ?2",
+                params![Utc::now().to_rfc3339(), existing.id, source_app, window_title, image_path],
             )?;
             return Ok((self.get(&existing.id)?.unwrap(), true));
         }
@@ -550,5 +561,26 @@ impl Db {
             params![cutoff],
         )?;
         Ok(n)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn recopy_updates_source_without_losing_favorites_or_categories() {
+        let db = Db::in_memory().unwrap();
+        let (first, _) = db.insert_text("text", "Fixture", "firefox", "Old", "same", false, None, None).unwrap();
+        db.toggle_favorite(&first.id).unwrap();
+        db.insert_text("text", "Other", "firefox", "", "other", false, None, None).unwrap();
+        let (again, fresh) = db.insert_text("text", "Fixture", "google-chrome", "New", "same", false, None, None).unwrap();
+        assert!(fresh);
+        assert_eq!(again.id, first.id);
+        assert_eq!(again.source_app, "google-chrome");
+        assert_eq!(again.window_title, "New");
+        assert!(again.is_favorite);
+        assert_eq!(again.categories_json, first.categories_json);
+        let (unknown, _) = db.insert_text("text", "Fixture", "Unknown", "", "same", false, None, None).unwrap();
+        assert_eq!(unknown.source_app, "google-chrome");
     }
 }

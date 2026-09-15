@@ -4,16 +4,19 @@ import { Search, Star, LayoutGrid, Pin, Settings2, StickyNote, X, Menu } from "l
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { useBoardify } from "../store";
+import { Brand } from "./Brand";
 import { ClipCard } from "./ClipCard";
 import { ClipPreview } from "./ClipPreview";
 import { CategoryPills } from "./CategoryPills";
 import { groupClips } from "../types";
-import { KINDS } from "../settings";
+import { KIND_IDS } from "../settings";
+import { useT } from "../i18n";
 import { isTauri } from "../demo";
 import { shelfVariants, spring } from "../motion";
 
 export function Shelf() {
   const s = useBoardify();
+  const { t, locale } = useT();
   const inputRef = useRef<HTMLInputElement>(null);
   const noteRef = useRef<HTMLTextAreaElement>(null);
   const live = useRef(s);
@@ -35,12 +38,12 @@ export function Shelf() {
         if (st.previewId) st.setPreview(null);
         else if (isTauri()) getCurrentWindow().hide();
       }
-      if (e.key === " " && !e.repeat && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA") {
+      if (e.key === " " && !e.repeat && !["INPUT", "TEXTAREA", "BUTTON"].includes(document.activeElement?.tagName ?? "")) {
         e.preventDefault();
         const id = st.selectedId ?? st.clips[0]?.id;
         if (id) st.setPreview(st.previewId === id ? null : id);
       }
-      if (e.key === "Enter" && !e.shiftKey && document.activeElement?.tagName !== "TEXTAREA") {
+      if (e.key === "Enter" && !e.shiftKey && !["TEXTAREA", "BUTTON"].includes(document.activeElement?.tagName ?? "")) {
         const id = st.selectedId ?? st.clips[0]?.id;
         if (id) st.activateClip(id);
       }
@@ -49,7 +52,7 @@ export function Shelf() {
         st.setNoteOpen(true);
         setTimeout(() => noteRef.current?.focus(), 40);
       }
-      if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+      if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA") {
         e.preventDefault();
         const i = Math.max(0, st.clips.findIndex((c) => c.id === st.selectedId));
         const next = e.key === "ArrowRight" ? Math.min(st.clips.length - 1, i + 1) : Math.max(0, i - 1);
@@ -73,7 +76,7 @@ export function Shelf() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const groups = groupClips(s.clips.slice(0, 36));
+  const groups = groupClips(s.clips.slice(0, 36), locale);
   let running = 0;
   const preview = s.clips.find((c) => c.id === s.previewId) ?? null;
 
@@ -89,27 +92,29 @@ export function Shelf() {
         initial={reduce ? false : "hidden"}
         animate="shown"
         transition={spring}
-        className="glass gpu pointer-events-auto w-[1040px] max-w-[96vw] rounded-[28px] overflow-hidden select-none relative"
+        className="shelf-window glass gpu pointer-events-auto w-[1040px] max-w-[96vw] overflow-hidden select-none relative"
         {...stop}
       >
-        <div className="flex items-center gap-2 px-4 pt-3.5 pb-2" data-tauri-drag-region>
+        <div className="shelf-toolbar" data-tauri-drag-region>
 
+          <Brand compact />
           <IconBtn
-            title="Collection"
+            title={t("shelf.collections")}
             active={s.settings.showCollections}
             onClick={() => s.patchSettings({ showCollections: !s.settings.showCollections })}
           >
             <Menu className="w-4 h-4" />
           </IconBtn>
-          <div className="flex items-center gap-2 flex-1 min-w-0">
+          <div className="shelf-search flex items-center gap-2 flex-1 min-w-0">
             <Search className="w-[15px] h-[15px] text-zinc-500 shrink-0" />
             <input
               ref={inputRef}
               value={s.query}
               onChange={(e) => s.setQuery(e.target.value)}
-              placeholder="Search…"
+              placeholder={t("shelf.searchPlaceholder")}
+              aria-label={t("shelf.searchAria")}
               data-tauri-drag-region="false"
-              className="bg-transparent outline-none flex-1 text-[13.5px] placeholder:text-zinc-500"
+              className="bg-transparent outline-none flex-1 min-w-0 text-[13px] placeholder:text-zinc-500"
             />
             {s.query && (
               <button onClick={() => s.setQuery("")} className="text-zinc-500 hover:text-white">
@@ -118,26 +123,26 @@ export function Shelf() {
             )}
           </div>
           <div className="flex items-center gap-1">
-            <IconBtn active={s.favOnly} title="Preferiti" onClick={() => s.setFavOnly(!s.favOnly)}>
+            <IconBtn active={s.favOnly} title={t("shelf.favorites")} onClick={() => s.setFavOnly(!s.favOnly)}>
               <Star className={`w-4 h-4 ${s.favOnly ? "fill-current" : ""}`} />
             </IconBtn>
-            <IconBtn active={s.pinnedOnly} title="Fissati" onClick={() => s.setPinnedOnly(!s.pinnedOnly)}>
+            <IconBtn active={s.pinnedOnly} title={t("shelf.pinned")} onClick={() => s.setPinnedOnly(!s.pinnedOnly)}>
               <Pin className={`w-4 h-4 ${s.pinnedOnly ? "fill-current" : ""}`} />
             </IconBtn>
-            <IconBtn title="Quick note" onClick={() => s.setNoteOpen(true)}>
+            <IconBtn title={t("shelf.newNote")} onClick={() => s.setNoteOpen(true)}>
               <StickyNote className="w-4 h-4" />
             </IconBtn>
-            <IconBtn title="Libreria  (Ctrl+Shift+L)" onClick={s.openLibrary}>
+            <IconBtn title={t("shelf.library")} onClick={s.openLibrary}>
               <LayoutGrid className="w-4 h-4" />
             </IconBtn>
-            <IconBtn title="Impostazioni" onClick={s.openSettings}>
+            <IconBtn title={t("shelf.settings")} onClick={s.openSettings}>
               <Settings2 className="w-4 h-4" />
             </IconBtn>
           </div>
         </div>
 
         {s.settings.showCollections && (
-          <div className="px-4 pb-2.5">
+          <div className="shelf-collections">
             <CategoryPills
               layoutId="shelf-pill"
               categories={s.categories}
@@ -149,25 +154,25 @@ export function Shelf() {
         )}
         {s.settings.showFilters && (
           <div className="flex gap-1.5 px-4 pb-2 overflow-x-auto no-scrollbar">
-            {KINDS.map((k) => (
+            {KIND_IDS.map((id) => (
               <button
-                key={k.id}
-                onClick={() => s.setKind(k.id)}
+                key={id}
+                onClick={() => s.setKind(id)}
                 className={`shrink-0 px-3 py-1 rounded-full text-[12px] ${
-                  s.kindFilter === k.id ? "bg-white text-black" : "text-zinc-400 hover:text-white"
+                  s.kindFilter === id ? "bg-white text-black" : "text-zinc-400 hover:text-white"
                 }`}
               >
-                {k.label}
+                {t(`kind.${id}` as const)}
               </button>
             ))}
           </div>
         )}
 
-        <div className="px-4 pb-4" data-tauri-drag-region="false">
+        <div className="shelf-content" data-tauri-drag-region="false">
           {s.clips.length === 0 ? (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="py-9 text-center">
-              <p className="text-[15px] font-semibold tracking-tight">Copia qualcosa e apparirà qui</p>
-              <p className="text-[12.5px] text-zinc-500 mt-1">Click = azioni · Invio / doppio click = copia</p>
+              <p className="text-[15px] font-semibold tracking-tight">{t("shelf.emptyTitle")}</p>
+              <p className="text-[12.5px] text-zinc-500 mt-1">{t("shelf.emptyHint")}</p>
             </motion.div>
           ) : (
             <div className="flex flex-col gap-2">
@@ -177,7 +182,7 @@ export function Shelf() {
                 return (
                   <div key={g.label}>
                     {groups.length > 1 && (
-                      <p className="text-[10.5px] text-zinc-500 px-0.5 mb-1.5 font-medium">{g.label}</p>
+                      <p className="shelf-date">{g.label}</p>
                     )}
                     <motion.div layout className="flex gap-2.5 overflow-x-auto no-scrollbar py-0.5">
                       <AnimatePresence mode="popLayout" initial={false}>
@@ -199,6 +204,7 @@ export function Shelf() {
           )}
         </div>
 
+        <div className="shelf-footer"><span><span className="status-dot" /> {s.clips.length === 1 ? t("shelf.footerCountOne") : t("shelf.footerCount", { count: s.clips.length })}</span><span><kbd>{t("kbd.space")}</kbd> {t("shelf.footerPreview")} <kbd>{t("kbd.enter")}</kbd> {t("shelf.footerCopy")}</span></div>
         <AnimatePresence>
           {s.noteOpen && (
             <motion.div
@@ -212,9 +218,10 @@ export function Shelf() {
                 initial={{ y: 10, scale: 0.98 }}
                 animate={{ y: 0, scale: 1 }}
                 onClick={(e) => e.stopPropagation()}
-                className="w-full max-w-[420px] rounded-2xl bg-[#16161a] ring-1 ring-white/10 p-4"
+                transition={spring}
+                className="glass gpu w-full max-w-[420px] rounded-2xl p-4"
               >
-                <p className="font-medium mb-2">Quick note</p>
+                <p className="font-medium mb-2">{t("shelf.noteTitle")}</p>
                 <textarea
                   ref={noteRef}
                   autoFocus
@@ -227,12 +234,12 @@ export function Shelf() {
                     }
                   }}
                   rows={5}
-                  placeholder="Scrivi e premi Ctrl+Invio…"
+                  placeholder={t("shelf.notePlaceholder")}
                   className="w-full bg-white/[0.05] rounded-xl px-3 py-2 text-[13px] outline-none ring-1 ring-white/10 resize-none"
                 />
                 <div className="flex justify-end gap-2 mt-3">
                   <button onClick={() => s.setNoteOpen(false)} className="text-[12.5px] text-zinc-400">
-                    Annulla
+                    {t("action.cancel")}
                   </button>
                   <button
                     onClick={() => {
@@ -243,7 +250,7 @@ export function Shelf() {
                     }}
                     className="px-3 py-1.5 rounded-full bg-white text-black text-[12.5px] font-semibold"
                   >
-                    Salva
+                    {t("action.save")}
                   </button>
                 </div>
               </motion.div>
@@ -254,7 +261,7 @@ export function Shelf() {
 
       <div className="pointer-events-auto">
         <AnimatePresence>
-          {preview && <ClipPreview key={preview.id} clip={preview} />}
+          {preview && <ClipPreview key="clip-preview" clip={preview} />}
         </AnimatePresence>
       </div>
     </div>
@@ -275,10 +282,12 @@ function IconBtn({
   return (
     <motion.button
       title={title}
+      aria-label={title}
+      aria-pressed={active}
       whileTap={{ scale: 0.9 }}
       onClick={onClick}
       data-tauri-drag-region="false"
-      className={`w-8 h-8 rounded-full grid place-items-center transition-colors
+      className={`w-8 h-8 rounded-[10px] grid place-items-center
         ${active ? "bg-white text-black" : "text-zinc-400 hover:text-white hover:bg-white/[0.08]"}`}
     >
       {children}

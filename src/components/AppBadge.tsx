@@ -1,11 +1,13 @@
+import { appIdentity, normalizeApp } from "../appIdentity";
 import { appColor, appInitial, prettyApp } from "../types";
 
 const svg = (body: string) =>
   `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">${body}</svg>`)}`;
 
 const KNOWN: Record<string, string> = {
+  boardify: "/boardify.svg",
   firefox: svg('<circle cx="16" cy="16" r="16" fill="#FF7139"/><circle cx="13" cy="15" r="7" fill="#0060DF"/>'),
-  chrome: svg('<circle cx="16" cy="16" r="16" fill="#4285F4"/><circle cx="16" cy="16" r="6.5" fill="#fff"/><path d="M16 2a14 14 0 0 1 12.1 7H16z" fill="#EA4335"/><path d="M28.1 9A14 14 0 0 1 16 30l-6-10.4z" fill="#34A853"/><path d="M10 19.6 16 2H4.9A14 14 0 0 0 10 19.6z" fill="#FBBC05"/>'),
+  chrome: svg('<path d="M16 16 3 8.5A15 15 0 0 1 29 8.5Z" fill="#EA4335"/><path d="M16 16 29 8.5A15 15 0 0 1 16 31Z" fill="#34A853"/><path d="M16 16 16 31A15 15 0 0 1 3 8.5Z" fill="#FBBC05"/><circle cx="16" cy="16" r="7" fill="#fff"/><circle cx="16" cy="16" r="5.5" fill="#4285F4"/>'),
   chromium: svg('<circle cx="16" cy="16" r="16" fill="#4c8bf5"/><circle cx="16" cy="16" r="6" fill="#fff"/>'),
   brave: svg('<circle cx="16" cy="16" r="16" fill="#FB542B"/>'),
   vivaldi: svg('<circle cx="16" cy="16" r="16" fill="#EF3939"/>'),
@@ -37,23 +39,9 @@ const KNOWN: Record<string, string> = {
   unknown: svg('<rect width="32" height="32" rx="16" fill="#3f3f46"/><rect x="10" y="8" width="12" height="16" rx="2" fill="#d4d4d8"/>'),
 };
 
-function keyOf(name: string): string {
-  let k = (name.split(/[/\\]/).pop() ?? name)
-    .replace(/\.(desktop|exe)$/i, "")
-    .toLowerCase()
-    .replace(/_/g, "-");
-  if (k === "navigator") k = "firefox";
-  return k;
-}
-
 function knownAppIcon(name: string): string | null {
-  const k = keyOf(name);
-  if (KNOWN[k]) return KNOWN[k];
-  for (const [id, icon] of Object.entries(KNOWN)) {
-    if (id === "unknown") continue;
-    if (k.includes(id)) return icon;
-  }
-  return null;
+  const key = appIdentity(name)?.id ?? normalizeApp(name);
+  return KNOWN[key] ?? null;
 }
 
 export function AppBadge({
@@ -65,7 +53,9 @@ export function AppBadge({
   icon?: string | null;
   size?: number;
 }) {
-  const src = (icon && icon.length > 8 ? icon : null) ?? knownAppIcon(name);
+  // Le vettoriali integrate sono nitide a ogni dimensione: precedenza sull'icona
+  // di runtime (favicon/.desktop spesso a 16px, sfocate se ingrandite).
+  const src = knownAppIcon(name) ?? (icon && icon.length > 8 ? icon : null);
   const label = prettyApp(name);
 
   if (src) {

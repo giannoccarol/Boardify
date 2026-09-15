@@ -35,26 +35,24 @@
         "minWidth": 900,
         "minHeight": 600,
         "decorations": false,
-        "transparent": false,
+        "transparent": true,
         "visible": false,
         "center": true,
-        "shadow": false,
-        "backgroundColor": "#0c0c0e"
+        "shadow": false
       },
       {
         "label": "settings",
         "title": "Boardify Settings",
         "url": "/?view=settings",
-        "width": 520,
-        "height": 680,
+        "width": 960,
+        "height": 820,
         "minWidth": 420,
         "minHeight": 480,
         "decorations": false,
-        "transparent": false,
+        "transparent": true,
         "visible": false,
         "center": true,
-        "shadow": false,
-        "backgroundColor": "#0c0c0e"
+        "shadow": false
       },
       {
         "label": "capture",

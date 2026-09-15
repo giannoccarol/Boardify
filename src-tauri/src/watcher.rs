@@ -1,25 +1,104 @@
-//! Polling clipboard (Wayland+X11). Text + immagini. Dedup via hash.
+//! Clipboard locale, immagini prima del testo e dedup solo dopo il salvataggio.
 
 use crate::db::{images_dir, ClipRow, Db};
 use crate::detect;
-use arboard::Clipboard;
+use arboard::{Clipboard, ImageData};
 use sha2::{Digest, Sha256};
-use std::sync::{Arc, Mutex};
+use std::path::Path;
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::Manager;
 
-fn hash_text(s: &str) -> String {
+pub fn hash_text(s: &str) -> String {
     let mut h = Sha256::new();
-    h.update(s.as_bytes());
+    h.update(s.trim().as_bytes());
     format!("{:x}", h.finalize())[..16].to_string()
 }
 
-fn lock(m: &Arc<Mutex<String>>) -> std::sync::MutexGuard<'_, String> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+pub fn hash_image(img: &ImageData<'_>) -> String {
+    let mut h = Sha256::new();
+    h.update(b"boardify-rgba-v1");
+    h.update((img.width as u64).to_le_bytes());
+    h.update((img.height as u64).to_le_bytes());
+    h.update(&img.bytes);
+    format!("{:x}", h.finalize())[..16].to_string()
 }
 
-fn active_app() -> (String, String) {
-    crate::source::active_app()
+pub enum Snapshot {
+    Image(ImageData<'static>),
+    Text(String),
+}
+
+impl Snapshot {
+    pub fn hash(&self) -> String {
+        match self {
+            Self::Image(img) => hash_image(img),
+            Self::Text(text) => hash_text(text),
+        }
+    }
+}
+
+// The browser often offers both image/png and a URL. Never import the companion
+// text after finding an image, including when that image is already in history.
+trait ClipboardReader {
+    fn image(&mut self) -> Result<ImageData<'static>, arboard::Error>;
+    fn files(&mut self) -> Result<Vec<std::path::PathBuf>, arboard::Error>;
+    fn text(&mut self) -> Result<String, arboard::Error>;
+}
+impl ClipboardReader for Clipboard {
+    fn image(&mut self) -> Result<ImageData<'static>, arboard::Error> {
+        self.get_image()
+    }
+    fn files(&mut self) -> Result<Vec<std::path::PathBuf>, arboard::Error> {
+        self.get().file_list()
+    }
+    fn text(&mut self) -> Result<String, arboard::Error> {
+        self.get_text()
+    }
+}
+pub fn read_snapshot(cb: &mut Clipboard) -> Result<Option<Snapshot>, String> {
+    read_from(cb)
+}
+fn read_from(cb: &mut impl ClipboardReader) -> Result<Option<Snapshot>, String> {
+    match cb.image() {
+        Ok(img) => return Ok(Some(Snapshot::Image(img))),
+        Err(arboard::Error::ContentNotAvailable) => {}
+        Err(e) => return Err(format!("Lettura immagine dagli appunti: {e}")),
+    }
+    if let Ok(paths) = cb.files() {
+        if let Some(img) = single_image_file(&paths) {
+            return img.map(|img| Some(Snapshot::Image(img)));
+        }
+    }
+    match cb.text() {
+        Ok(text) if !text.trim().is_empty() => Ok(Some(Snapshot::Text(text))),
+        Ok(_) | Err(arboard::Error::ContentNotAvailable) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+fn single_image_file(paths: &[std::path::PathBuf]) -> Option<Result<ImageData<'static>, String>> {
+    if paths.len() != 1 || !paths[0].is_file() {
+        return None;
+    }
+    let reader = image::ImageReader::open(&paths[0])
+        .ok()?
+        .with_guessed_format()
+        .ok()?;
+    reader.format()?;
+    Some(
+        reader
+            .decode()
+            .map(|img| {
+                let rgba = img.to_rgba8();
+                ImageData {
+                    width: rgba.width() as usize,
+                    height: rgba.height() as usize,
+                    bytes: rgba.into_raw().into(),
+                }
+            })
+            .map_err(|e| format!("File immagine non leggibile: {e}")),
+    )
 }
 
 pub fn ingest_text(
@@ -37,50 +116,55 @@ pub fn ingest_text(
     if h == *last_hash {
         return Err("duplicato".into());
     }
-    *last_hash = h.clone();
     let kind = detect::detect_kind(t);
     let color = detect::extract_color(t);
     let sensitive = detect::is_sensitive(t);
     let db = db.lock().map_err(|e| e.to_string())?;
-    let (row, fresh) = db
-        .insert_text(kind, t, source_app, window_title, &h, sensitive, color.as_deref(), None)
+    let (row, _) = db
+        .insert_text(
+            kind,
+            t,
+            source_app,
+            window_title,
+            &h,
+            sensitive,
+            color.as_deref(),
+            None,
+        )
         .map_err(|e| e.to_string())?;
-    if !fresh {
-        return Err("duplicato".into());
-    }
+    *last_hash = h;
     Ok(row)
 }
 
 fn ingest_image(
-    db_arc: &Arc<Mutex<Db>>,
-    rgba: &[u8],
-    width: usize,
-    height: usize,
+    db: &Arc<Mutex<Db>>,
+    img: &ImageData<'_>,
     source_app: &str,
     window_title: &str,
     last_hash: &mut String,
-) -> Result<(), String> {
-    use image::{ImageBuffer, Rgba};
-    let mut h = Sha256::new();
-    h.update(rgba);
-    let hash = format!("{:x}", h.finalize())[..16].to_string();
-    if width < 32 || height < 32 {
-        return Err("piccola".into());
+    dir: &Path,
+) -> Result<ClipRow, String> {
+    let width = u32::try_from(img.width).map_err(|_| "larghezza non valida")?;
+    let height = u32::try_from(img.height).map_err(|_| "altezza non valida")?;
+    let len = img
+        .width
+        .checked_mul(img.height)
+        .and_then(|n| n.checked_mul(4));
+    if width == 0 || height == 0 || len != Some(img.bytes.len()) {
+        return Err("immagine non valida".into());
     }
-    if hash == *last_hash {
-        return Err("duplicato".into());
-    }
-    *last_hash = hash.clone();
-    let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
-        ImageBuffer::from_raw(width as u32, height as u32, rgba.to_vec())
-            .ok_or("immagine non valida")?;
-    let fname = format!("{}.png", uuid::Uuid::new_v4());
-    let path = images_dir().join(&fname);
-    img.save(&path).map_err(|e| e.to_string())?;
-    let text = format!("[Immagine {}x{}]", width, height);
-    let (row, fresh) = {
-        let db = db_arc.lock().map_err(|e| e.to_string())?;
-        db.insert_text(
+    let hash = hash_image(img);
+    // Content-addressed files avoid orphan PNGs on duplicate captures/retries.
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{hash}.png"));
+    let rgba = image::RgbaImage::from_raw(width, height, img.bytes.to_vec())
+        .ok_or("immagine non valida")?;
+    rgba.save(&path).map_err(|e| e.to_string())?;
+    let text = format!("[Immagine {width}x{height}]");
+    let (row, _) = db
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert_text(
             "image",
             &text,
             source_app,
@@ -90,145 +174,294 @@ fn ingest_image(
             None,
             Some(path.to_string_lossy().as_ref()),
         )
-        .map_err(|e| e.to_string())?
-    };
-    if !fresh {
-        return Err("duplicato".into());
+        .map_err(|e| e.to_string())?;
+    *last_hash = hash;
+    Ok(row)
+}
+
+fn ingest_snapshot(
+    db: &Arc<Mutex<Db>>,
+    snapshot: &Snapshot,
+    source: &(String, String),
+    last_hash: &mut String,
+    dir: &Path,
+) -> Result<Option<ClipRow>, String> {
+    if snapshot.hash() == *last_hash {
+        return Ok(None);
     }
-    if let Ok(out) = std::process::Command::new("tesseract")
-        .args([path.to_string_lossy().as_ref(), "stdout", "-l", "eng+ita"])
-        .output()
-    {
-        let ocr = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if !ocr.is_empty() {
-            if let Ok(db) = db_arc.lock() {
-                let _ = db.set_ocr(&row.id, &ocr);
-            }
-        }
+    match snapshot {
+        Snapshot::Image(img) => ingest_image(db, img, &source.0, &source.1, last_hash, dir),
+        Snapshot::Text(text) => ingest_text(db, text, &source.0, &source.1, last_hash),
+    }
+    .map(Some)
+}
+
+fn ignored(app: &str, settings: &crate::WatchSettings) -> bool {
+    let app = app.to_lowercase();
+    settings.ignored_apps.iter().any(|name| {
+        let name = name.trim().to_lowercase();
+        !name.is_empty() && app.contains(&name)
+    })
+}
+
+// Both automatic and manual capture use the same path, on a background thread.
+fn capture(app: &tauri::AppHandle, cb: &mut Clipboard, automatic: bool) -> Result<(), String> {
+    let state = app.state::<crate::AppState>();
+    let settings = state.watch.lock().map_err(|e| e.to_string())?.clone();
+    if automatic && !settings.auto_capture {
+        return Ok(());
+    }
+    // Take the source before decoding images/OCR; use this same snapshot for the
+    // ignored-app check and the saved metadata.
+    let source = crate::source::active_app();
+    let _clipboard_guard = state.clipboard_gate.lock().map_err(|e| e.to_string())?;
+    let Some(snapshot) = read_snapshot(cb)? else {
+        return Ok(());
+    };
+    let mut last_hash = state.last_hash.lock().map_err(|e| e.to_string())?;
+    if ignored(&source.0, &settings) {
+        *last_hash = snapshot.hash();
+        return Ok(());
+    }
+    let row = ingest_snapshot(&state.db, &snapshot, &source, &mut last_hash, &images_dir())?;
+    drop(last_hash);
+    drop(_clipboard_guard);
+    if let Some(row) = row {
+        crate::notify_new_clip(app);
+        queue_ocr(app, row);
     }
     Ok(())
 }
 
+pub fn capture_now(app: &tauri::AppHandle) -> Result<(), String> {
+    let mut cb = Clipboard::new().map_err(|e| e.to_string())?;
+    capture(app, &mut cb, false)
+}
+
+fn queue_ocr(app: &tauri::AppHandle, row: ClipRow) {
+    if row.kind != "image" || row.ocr_text.is_some() {
+        return;
+    }
+    // OCR is optional and never holds the clipboard or hash locks. A bounded
+    // queue keeps rapid screenshots from spawning unlimited tesseract processes.
+    static OCR: OnceLock<mpsc::SyncSender<(tauri::AppHandle, ClipRow)>> = OnceLock::new();
+    let tx = OCR.get_or_init(|| {
+        let (tx, rx) = mpsc::sync_channel::<(tauri::AppHandle, ClipRow)>(8);
+        std::thread::spawn(move || {
+            for (app, row) in rx {
+                let Some(path) = row.image_path else { continue };
+                if let Ok(text) = crate::tesseract(Path::new(&path)) {
+                    if !text.is_empty() {
+                        let state = app.state::<crate::AppState>();
+                        if let Ok(db) = state.db.lock() {
+                            if db.set_ocr(&row.id, &text).is_ok() {
+                                use tauri::Emitter;
+                                let _ = app.emit("clips-changed", ());
+                            }
+                        };
+                    }
+                }
+            }
+        });
+        tx
+    });
+    let _ = tx.try_send((app.clone(), row));
+}
+
 pub fn run_loop(app: tauri::AppHandle) {
-    let state: tauri::State<crate::AppState> = app.state();
-    let db = state.db.clone();
-    let last_hash = state.last_hash.clone();
-    let last_seen = state.last_seen.clone();
-    let suppress = state.suppress_once.clone();
-    let watch = state.watch.clone();
-    drop(state);
-
-    // Clipboard può fallire su Wayland senza display; retry lazy
-    let mut clipboard: Option<Clipboard> = Clipboard::new().ok();
-    // seed: non importare ciò che è già nella clipboard all'avvio? invece sì, una volta.
-    let mut first = true;
-
+    let mut clipboard = Clipboard::new().ok();
     loop {
-        std::thread::sleep(Duration::from_millis(700));
+        std::thread::sleep(Duration::from_millis(500));
         if clipboard.is_none() {
             clipboard = Clipboard::new().ok();
-            if clipboard.is_none() {
-                continue;
+        }
+        if let Some(cb) = clipboard.as_mut() {
+            // A failed read/write leaves last_hash intact and is retried. In
+            // particular, no poll is blindly skipped after Boardify copies.
+            let _ = capture(&app, cb, true);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    struct Fixture {
+        db: Arc<Mutex<Db>>,
+        dir: std::path::PathBuf,
+        hash: String,
+    }
+    impl Fixture {
+        fn new() -> Self {
+            Self {
+                db: Arc::new(Mutex::new(Db::in_memory().unwrap())),
+                dir: std::env::temp_dir()
+                    .join(format!("boardify-image-test-{}", uuid::Uuid::new_v4())),
+                hash: String::new(),
             }
         }
-        let cb = clipboard.as_mut().unwrap();
-
-        // Se abbiamo appena fatto copy-to-clipboard noi, salta un giro
-        let settings = watch.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        if !settings.auto_capture {
-            first = false;
-            continue;
+        fn ingest(&mut self, snap: &Snapshot) -> Result<Option<ClipRow>, String> {
+            ingest_snapshot(
+                &self.db,
+                snap,
+                &("google-chrome".into(), "Fixture".into()),
+                &mut self.hash,
+                &self.dir,
+            )
         }
-
-        if *suppress.lock().unwrap_or_else(|e| e.into_inner()) {
-            *suppress.lock().unwrap_or_else(|e| e.into_inner()) = false;
-            // Riallinea gli hash a ciò che abbiamo scritto (copy_clip li ha già impostati).
-            let img_hash = cb.get_image().ok().map(|img| {
-                let mut h = Sha256::new();
-                h.update(&img.bytes);
-                format!("{:x}", h.finalize())[..16].to_string()
-            });
-            let text_hash = cb.get_text().ok().map(|t| hash_text(t.trim()));
-            let has_img = img_hash.is_some();
-            if let Some(ih) = img_hash {
-                *last_hash.lock().unwrap_or_else(|e| e.into_inner()) = ih;
-            }
-            if let Some(th) = text_hash {
-                *last_seen.lock().unwrap_or_else(|e| e.into_inner()) = th.clone();
-                if !has_img {
-                    *last_hash.lock().unwrap_or_else(|e| e.into_inner()) = th;
-                }
-            } else if has_img {
-                // Clipboard solo-immagine: dimentica il testo compagno precedente.
-                *last_seen.lock().unwrap_or_else(|e| e.into_inner()) = String::new();
-            }
-            continue;
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
         }
-
-        let ignored = || {
-            let (app_name, _) = active_app();
-            settings
-                .ignored_apps
-                .iter()
-                .any(|a| app_name.to_lowercase().contains(&a.to_lowercase()))
+    }
+    fn image(w: usize, h: usize) -> Snapshot {
+        Snapshot::Image(ImageData {
+            width: w,
+            height: h,
+            bytes: vec![127; w * h * 4].into(),
+        })
+    }
+    struct BrowserClipboard {
+        image: Option<ImageData<'static>>,
+        text_reads: usize,
+        broken_image: bool,
+    }
+    impl ClipboardReader for BrowserClipboard {
+        fn image(&mut self) -> Result<ImageData<'static>, arboard::Error> {
+            if self.broken_image {
+                return Err(arboard::Error::ConversionFailure);
+            }
+            self.image
+                .clone()
+                .ok_or(arboard::Error::ContentNotAvailable)
+        }
+        fn files(&mut self) -> Result<Vec<std::path::PathBuf>, arboard::Error> {
+            Err(arboard::Error::ContentNotAvailable)
+        }
+        fn text(&mut self) -> Result<String, arboard::Error> {
+            self.text_reads += 1;
+            Ok("https://example.test/image.png".into())
+        }
+    }
+    #[test]
+    fn browser_image_with_url_never_turns_into_a_link_even_on_duplicate_poll() {
+        let Snapshot::Image(img) = image(48, 32) else {
+            unreachable!()
         };
-
-        let text = cb.get_text().ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-        let text_hash = text.as_ref().map(|t| hash_text(t));
-        let text_new = match &text_hash {
-            Some(h) => first || h != &*lock(&last_hash) && h != &*lock(&last_seen),
-            None => false,
+        let mut browser = BrowserClipboard {
+            image: Some(img),
+            text_reads: 0,
+            broken_image: false,
         };
-
-        // L'immagine va cercata quando cambia qualcosa (una copia immagine porta
-        // quasi sempre anche un testo/URL compagno) oppure ogni ~3 giri per le
-        // copie di sola immagine (es. screenshot), dove il testo resta uguale.
-        static mut TICK: u8 = 0;
-        let tick = unsafe {
-            TICK = TICK.wrapping_add(1);
-            TICK
+        let mut f = Fixture::new();
+        assert_eq!(
+            f.ingest(&read_from(&mut browser).unwrap().unwrap())
+                .unwrap()
+                .unwrap()
+                .kind,
+            "image"
+        );
+        assert!(f
+            .ingest(&read_from(&mut browser).unwrap().unwrap())
+            .unwrap()
+            .is_none());
+        assert_eq!(browser.text_reads, 0);
+    }
+    #[test]
+    fn unreadable_image_retries_instead_of_importing_companion_url() {
+        let mut browser = BrowserClipboard {
+            image: None,
+            text_reads: 0,
+            broken_image: true,
         };
-        let mut changed = false;
-        if text_new || tick % 3 == 0 || first {
-            if let Ok(img) = cb.get_image() {
-                let mut h = Sha256::new();
-                h.update(&img.bytes);
-                let ih = format!("{:x}", h.finalize())[..16].to_string();
-                if first || ih != *lock(&last_hash) {
-                    let (app_name, title) = active_app();
-                    // Registra comunque: evita di riprovare lo stesso contenuto.
-                    *lock(&last_hash) = ih.clone();
-                    if let Some(th) = &text_hash {
-                        *lock(&last_seen) = th.clone();
-                    }
-                    if !ignored() {
-                        if ingest_image(&db, &img.bytes, img.width, img.height, &app_name, &title, &mut lock(&last_hash)).is_ok() {
-                            changed = true;
-                        }
-                    }
-                    first = false;
-                }
-            }
-        }
-
-        if !changed {
-            if let (Some(t), Some(h)) = (text, text_hash) {
-                if first || h != *lock(&last_hash) && h != *lock(&last_seen) {
-                    let (app_name, title) = active_app();
-                    *lock(&last_seen) = h.clone();
-                    if !ignored() {
-                        match ingest_text(&db, &t, &app_name, &title, &mut lock(&last_hash)) {
-                            Ok(_) => changed = true,
-                            Err(_) => {}
-                        }
-                    }
-                    first = false;
-                }
-            }
-        }
-
-        if changed {
-            crate::notify_new_clip(&app);
-        }
+        assert!(read_from(&mut browser).is_err());
+        assert_eq!(browser.text_reads, 0);
+        browser.broken_image = false;
+        assert!(matches!(
+            read_from(&mut browser).unwrap(),
+            Some(Snapshot::Text(_))
+        ));
+    }
+    #[test]
+    fn image_is_saved_on_first_capture_and_deduplicated() {
+        let mut f = Fixture::new();
+        let snap = image(64, 48);
+        let row = f.ingest(&snap).unwrap().unwrap();
+        assert_eq!(row.kind, "image");
+        assert_eq!(row.source_app, "google-chrome");
+        let saved = image::open(row.image_path.unwrap()).unwrap();
+        assert_eq!((saved.width(), saved.height()), (64, 48));
+        assert!(f.ingest(&snap).unwrap().is_none());
+        assert_eq!(std::fs::read_dir(&f.dir).unwrap().count(), 1);
+        assert_eq!(
+            f.db.lock()
+                .unwrap()
+                .list(20, None, None, false)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+    #[test]
+    fn screenshots_without_companion_text_are_captured_consecutively() {
+        let mut f = Fixture::new();
+        assert!(f.ingest(&image(40, 50)).unwrap().is_some());
+        assert!(f.ingest(&image(50, 40)).unwrap().is_some());
+        assert_eq!(
+            f.db.lock()
+                .unwrap()
+                .list(20, None, None, false)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+    #[test]
+    fn failed_save_does_not_consume_image_and_can_retry() {
+        let mut f = Fixture::new();
+        std::fs::write(&f.dir, b"not a directory").unwrap();
+        let snap = image(8, 8);
+        assert!(f.ingest(&snap).is_err());
+        assert!(f.hash.is_empty());
+        std::fs::remove_file(&f.dir).unwrap();
+        assert!(f.ingest(&snap).unwrap().is_some());
+    }
+    #[test]
+    fn tiny_images_and_alpha_are_preserved() {
+        let mut f = Fixture::new();
+        let snap = Snapshot::Image(ImageData {
+            width: 1,
+            height: 1,
+            bytes: vec![255, 0, 0, 64].into(),
+        });
+        let row = f.ingest(&snap).unwrap().unwrap();
+        assert_eq!(
+            image::open(row.image_path.unwrap())
+                .unwrap()
+                .to_rgba8()
+                .into_raw(),
+            [255, 0, 0, 64]
+        );
+    }
+    #[test]
+    fn invalid_image_never_advances_hash() {
+        let mut f = Fixture::new();
+        let snap = Snapshot::Image(ImageData {
+            width: 64,
+            height: 64,
+            bytes: vec![0; 16].into(),
+        });
+        assert!(f.ingest(&snap).is_err());
+        assert!(f.hash.is_empty());
+    }
+    #[test]
+    fn file_manager_single_image_is_decoded_but_multiple_files_are_not_collapsed() {
+        let mut f = Fixture::new();
+        let row = f.ingest(&image(12, 20)).unwrap().unwrap();
+        let paths = vec![std::path::PathBuf::from(row.image_path.unwrap())];
+        let decoded = single_image_file(&paths).unwrap().unwrap();
+        assert_eq!((decoded.width, decoded.height), (12, 20));
+        assert!(single_image_file(&[paths[0].clone(), paths[0].clone()]).is_none());
     }
 }
