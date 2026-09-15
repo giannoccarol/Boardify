@@ -6,6 +6,7 @@ import { ArrowUpRight, Check, ChevronRight, Clipboard, Columns3, Command, HardDr
 import { useBoardify } from "../store";
 import { DEFAULT_SETTINGS, type AiEffort, type ClickAction, type ClipSize, type Locale, type Settings as Preferences } from "../settings";
 import { AI_PROVIDERS, aiProvider, maskKey, type AiProviderDef } from "../ai/providers";
+import { effortLevelsFor } from "../ai/effort";
 import { listProviderModels, pingAi } from "../ai/client";
 import { useT, type DictKey } from "../i18n";
 import { isTauri } from "../demo";
@@ -186,6 +187,8 @@ function AiPanel({ settings, set, aiSearch, setAiSearch, aiModels, setAiModels, 
   const def = aiProvider(settings.aiProvider);
   const activeKey = settings.aiKeys[settings.aiProvider] ?? "";
   const suggestions = Array.from(new Set([...aiModels, ...(def?.suggestedModels ?? [])]));
+  // Livelli validi per il modello scelto (come Pi: riletti a ogni cambio modello).
+  const levels = effortLevelsFor(settings.aiProvider, settings.aiModel);
 
   const loadModelsFor = async (providerId: string, key: string, base: string) => {
     const d = aiProvider(providerId);
@@ -216,6 +219,13 @@ function AiPanel({ settings, set, aiSearch, setAiSearch, aiModels, setAiModels, 
     useBoardify.getState().patchSettings({ aiProvider: id, aiModel: "" });
     const st = useBoardify.getState().settings;
     void loadModelsFor(id, st.aiKeys[id] ?? "", st.aiBaseUrl);
+  };
+
+  const changeModel = (model: string) => {
+    // Come Pi (syncThinkingAfterModelChange): l'effort segue i livelli del modello.
+    const lv = effortLevelsFor(settings.aiProvider, model);
+    const effort = lv.includes(settings.aiEffort) ? settings.aiEffort : (lv.includes("medium") ? "medium" : lv[0]);
+    useBoardify.getState().patchSettings({ aiModel: model, aiEffort: effort });
   };
 
   const test = async () => {
@@ -257,7 +267,7 @@ function AiPanel({ settings, set, aiSearch, setAiSearch, aiModels, setAiModels, 
           className="settings-input"
           list="ai-model-list"
           value={settings.aiModel}
-          onChange={(e) => set("aiModel", e.target.value)}
+          onChange={(e) => changeModel(e.target.value)}
           placeholder={suggestions[0] ?? "…"}
           spellCheck={false}
         />
@@ -267,7 +277,11 @@ function AiPanel({ settings, set, aiSearch, setAiSearch, aiModels, setAiModels, 
         </button>
       </Row>
       <Row label={t("settings.aiEffort")} hint={t("settings.aiEffortHint")}>
-        <Segment label={t("settings.aiEffort")} value={settings.aiEffort} options={[["off", t("settings.effort.off")], ["minimal", t("settings.effort.minimal")], ["medium", t("settings.effort.medium")], ["high", t("settings.effort.high")]]} onChange={(v) => set("aiEffort", v as AiEffort)} />
+        {levels.length > 1 ? (
+          <Segment label={t("settings.aiEffort")} value={settings.aiEffort} options={levels.map((l) => [l, t(`settings.effort.${l}` as const)] as [string, string])} onChange={(v) => set("aiEffort", v as AiEffort)} />
+        ) : (
+          <span className="provider-hint">{t("settings.aiEffortFixed", { level: t(`settings.effort.${levels[0]}` as const) })}</span>
+        )}
       </Row>
       <Row label={t("settings.aiBaseUrl")} hint={t("settings.aiBaseUrlHint")}>
         <input aria-label={t("settings.aiBaseUrl")} className="settings-input" value={settings.aiBaseUrl} onChange={(e) => set("aiBaseUrl", e.target.value)} placeholder={def?.baseUrl || "https://…"} spellCheck={false} />

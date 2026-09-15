@@ -6,6 +6,7 @@
 import type { AiEffort } from "../settings";
 import { invoke } from "@tauri-apps/api/core";
 import { aiProvider, resolveBase } from "./providers";
+import { effectiveEffort } from "./effort";
 import { isTauri } from "../demo";
 
 export interface AiRunParams {
@@ -193,7 +194,9 @@ async function runOpenAi(p: AiRunParams, base: string): Promise<string> {
     ],
     temperature: 0.7,
   };
-  if (p.effort !== "off") body.reasoning_effort = p.effort;
+  if (effectiveEffort(p.providerId, p.model, p.effort) !== "off") {
+    body.reasoning_effort = p.effort;
+  }
   const url = `${base}/chat/completions`;
   try {
     return openAiText(await postJson(url, headers, body));
@@ -260,7 +263,9 @@ function anthropicThinking(effort: AiEffort): { budget: number; max: number } | 
 }
 
 async function runAnthropic(p: AiRunParams, base: string): Promise<string> {
-  const thinking = anthropicThinking(p.effort);
+  const thinking = effectiveEffort(p.providerId, p.model, p.effort) !== "off"
+    ? anthropicThinking(p.effort)
+    : null;
   const blocks: unknown[] = [{ type: "text", text: trunc(p.user) }];
   if (p.imageDataUrl) {
     const { mime, data } = splitDataUrl(p.imageDataUrl);
@@ -299,7 +304,9 @@ async function runGemini(p: AiRunParams, base: string): Promise<string> {
     const { mime, data } = splitDataUrl(p.imageDataUrl);
     parts.push({ inlineData: { mimeType: mime, data } });
   }
-  const budget = geminiBudget(p.effort);
+  const budget = effectiveEffort(p.providerId, p.model, p.effort) !== "off"
+    ? geminiBudget(p.effort)
+    : null;
   const body: Record<string, unknown> = {
     system_instruction: { parts: [{ text: p.system }] },
     contents: [{ role: "user", parts }],
