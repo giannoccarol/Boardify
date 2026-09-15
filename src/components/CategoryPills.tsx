@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { Plus } from "lucide-react";
 import { snappy } from "../motion";
 import { useT } from "../i18n";
@@ -17,6 +17,7 @@ interface Props {
 
 export function CategoryPills({ categories, active, onSelect, onCreate, layoutId }: Props) {
   const { t } = useT();
+  const reduce = useReducedMotion();
   const settings = useBoardify((s) => s.settings);
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
@@ -44,8 +45,10 @@ export function CategoryPills({ categories, active, onSelect, onCreate, layoutId
       {pills.map((p) => {
         const isOn = active === p.id;
         return (
-          <button
+          <motion.button
             key={p.id}
+            whileTap={reduce ? undefined : { scale: 0.95 }}
+            transition={snappy}
             aria-pressed={isOn}
             onClick={() => onSelect(isOn && p.id !== "all" ? "all" : p.id)}
             className={`category-pill relative shrink-0 flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[12.5px] font-medium
@@ -62,7 +65,7 @@ export function CategoryPills({ categories, active, onSelect, onCreate, layoutId
             <span className={`pill-count relative z-10 text-[10px] tabular-nums ${isOn ? "text-black/50" : "text-zinc-500"}`}>
               {p.count}
             </span>
-          </button>
+          </motion.button>
         );
       })}
       {canCreate && (adding ? (

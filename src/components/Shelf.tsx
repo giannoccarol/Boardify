@@ -9,7 +9,8 @@ import { ActionGlyph } from "./ActionGlyph";
 import { ClipCard } from "./ClipCard";
 import { ClipPreview } from "./ClipPreview";
 import { CategoryPills } from "./CategoryPills";
-import { groupClips } from "../types";
+import { groupClips, type Clip } from "../types";
+import { useShelfScroll } from "../useShelfScroll";
 import { KIND_IDS } from "../settings";
 import { useT } from "../i18n";
 import { isTauri } from "../demo";
@@ -84,6 +85,7 @@ export function Shelf() {
     s.refresh();
     const t = setTimeout(() => inputRef.current?.focus(), 50);
     const onKey = (e: KeyboardEvent) => {
+      if (closeTask.current) return;
       const st = live.current;
       if (st.noteOpen) {
         if (e.key === "Escape") st.setNoteOpen(false);
@@ -109,8 +111,9 @@ export function Shelf() {
       }
       if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA") {
         e.preventDefault();
-        const i = Math.max(0, st.clips.findIndex((c) => c.id === st.selectedId));
-        const next = e.key === "ArrowRight" ? Math.min(st.clips.length - 1, i + 1) : Math.max(0, i - 1);
+        const last = Math.min(st.clips.length, 36) - 1;
+        const i = Math.min(last, Math.max(0, st.clips.findIndex((c) => c.id === st.selectedId)));
+        const next = e.key === "ArrowRight" ? Math.min(last, i + 1) : Math.max(0, i - 1);
         if (st.clips[next]) st.select(st.clips[next].id);
       }
     };
@@ -256,19 +259,7 @@ export function Shelf() {
                     {groups.length > 1 && (
                       <p className="shelf-date">{g.label}</p>
                     )}
-                    <motion.div layout className="flex gap-2.5 overflow-x-auto no-scrollbar py-0.5">
-                      <AnimatePresence mode="popLayout" initial={false}>
-                        {g.items.map((clip, i) => (
-                          <ClipCard
-                            key={clip.id}
-                            clip={clip}
-                            index={start + i}
-                            selected={clip.id === s.selectedId}
-                            variant="shelf"
-                          />
-                        ))}
-                      </AnimatePresence>
-                    </motion.div>
+                    <ShelfRail clips={g.items} start={start} selectedId={s.selectedId} enabled={phase === "open"} />
                   </div>
                 );
               })}
@@ -338,6 +329,24 @@ export function Shelf() {
         </AnimatePresence>
       </div>
     </div>
+  );
+}
+
+function ShelfRail({ clips, start, selectedId, enabled }: {
+  clips: Clip[];
+  start: number;
+  selectedId: string | null;
+  enabled: boolean;
+}) {
+  const ref = useShelfScroll(selectedId, enabled);
+  return (
+    <motion.div ref={ref} layout layoutScroll className="shelf-rail flex gap-2.5 overflow-x-auto no-scrollbar py-0.5">
+      <AnimatePresence mode="popLayout" initial={false}>
+        {clips.map((clip, i) => (
+          <ClipCard key={clip.id} clip={clip} index={start + i} selected={clip.id === selectedId} variant="shelf" />
+        ))}
+      </AnimatePresence>
+    </motion.div>
   );
 }
 

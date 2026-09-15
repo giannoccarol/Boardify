@@ -444,8 +444,7 @@ kbd { font-family: inherit; font-size: 10px; border-radius: 5px; border: 1px sol
 .copy-split-toggle { display: grid; place-items: center; width: 24px; height: 100%; border-radius: 0 999px 999px 0; opacity: 0.75; }
 .copy-split-toggle:hover { opacity: 1; background: #ffffff10; }
 .copy-split.is-active .copy-split-toggle:hover { background: #0000000c; }
-.copy-chevron { transition: transform 0.12s ease; }
-.copy-chevron.is-open { transform: rotate(180deg); }
+.copy-split-label { min-width: 6.5ch; text-align: left; }
 .copy-menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 60; width: 300px; max-width: min(300px, 72vw); padding: 6px; border-radius: 16px; }
 .copy-menu-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px 6px; }
 .copy-menu-count { font-size: 10px; color: #8b8b94; background: #ffffff0d; border-radius: 999px; padding: 1px 7px; }
@@ -471,6 +470,26 @@ kbd { font-family: inherit; font-size: 10px; border-radius: 5px; border: 1px sol
 .ai-result-head { display: flex; align-items: center; gap: 7px; font-size: 11px; color: #cdd0d9; margin-bottom: 8px; }
 .ai-result-head > button { margin-left: auto; }
 .ai-text { white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.6; color: #e8e9ed; max-height: 260px; overflow: auto; }
+/* Risultato AI renderizzato da Markdown (AiPanel): solo statico, niente animazioni. */
+.ai-md p { margin: 0 0 6px; }
+.ai-md p:last-child { margin-bottom: 0; }
+.ai-md-h1 { font-size: 13px; font-weight: 700; color: #ffffff; margin: 2px 0 6px; }
+.ai-md-h2 { font-size: 12.5px; font-weight: 650; color: #f0f0f3; margin: 8px 0 4px; }
+.ai-md ul, .ai-md ol { margin: 4px 0 8px; padding-left: 18px; }
+.ai-md li { margin: 3px 0; }
+.ai-md li::marker { color: #8f97a4; }
+.ai-md-task { list-style: none; }
+.ai-md-task input { margin-right: 7px; accent-color: #e6e6e6; }
+.ai-md blockquote { border-left: 2px solid #ffffff22; margin: 6px 0; padding: 2px 0 2px 10px; color: #c9cbd1; }
+.ai-md code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; background: #ffffff0d; padding: 1px 5px; border-radius: 6px; }
+.ai-md-code { margin: 6px 0; padding: 10px 12px; background: #0a0b0d; border: 1px solid #ffffff12; border-radius: 10px; overflow-x: auto; font-size: 11.5px; }
+.ai-md-code code { background: none; padding: 0; }
+.ai-md a { color: #9ec5ff; text-decoration: underline; }
+.ai-md del { color: #a9a9b2; }
+.ai-md hr { border: 0; border-top: 1px solid #ffffff14; margin: 8px 0; }
+.ai-md-table { border-collapse: collapse; margin: 6px 0; font-size: 11.5px; max-width: 100%; }
+.ai-md-table th, .ai-md-table td { border: 1px solid #ffffff14; padding: 4px 8px; text-align: left; }
+.ai-md-table th { background: #ffffff08; font-weight: 600; }
 .ai-note { font-size: 11px; color: #8f97a4; line-height: 1.5; margin-bottom: 6px; }
 .ai-note strong { color: #cdd0d9; }
 .ai-error { font-size: 11.5px; color: #eaa7a7; line-height: 1.5; }
@@ -485,7 +504,7 @@ kbd { font-family: inherit; font-size: 10px; border-radius: 5px; border: 1px sol
   .preview-info-chip { display: none; }
   .preview-toolbar { gap: 4px; padding: 10px; }
   .preview-tool { min-width: 26px; width: 26px; height: 28px; padding: 0; }
-  .preview-tool:has(span) { width: auto; padding: 0 9px; }
+  .preview-tool:has(> span:not(.action-glyph)) { width: auto; padding: 0 9px; }
   .preview-tools { gap: 3px; }
   .preview-type { font-size: 9px; max-width: 32%; overflow: hidden; text-overflow: ellipsis; }
   .preview-text { padding: 15px; }
@@ -498,3 +517,11 @@ kbd { font-family: inherit; font-size: 10px; border-radius: 5px; border: 1px sol
 
 .copy-error { position: fixed; z-index: 100; bottom: 24px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 18px; max-width: calc(100vw - 32px); padding: 12px 14px 12px 18px; border-radius: 18px; color: #f5f5f5; font-size: 13px; }
 .copy-error button { display: grid; place-items: center; flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; }
+
+/* Origini coerenti con il trigger; i cambi di icona non alterano il layout. */
+.clip-actions, .copy-menu, .ai-menu { transform-origin: 100% 0; }
+.clip-preview { transform-origin: 50% 0; }
+.shelf-rail { position: relative; scroll-behavior: auto; overscroll-behavior-x: contain; }
+.action-glyph { display: inline-grid; place-items: center; position: relative; width: 1em; height: 1em; min-width: 14px; min-height: 14px; flex-shrink: 0; }
+.action-glyph-icon { grid-area: 1 / 1; display: inline-grid; place-items: center; position: relative; }
+.action-glyph-pulse { position: absolute; inset: -5px; border: 1px solid currentColor; border-radius: 50%; pointer-events: none; }

@@ -22,16 +22,23 @@ export const soft: Transition = {
   mass: 0.8,
 };
 
+// Scorrimento nativo: uno scatto di rotella attraversa circa una card.
+export const shelfScroll = { wheelGain: 1.85, linePixels: 32, preciseThreshold: 50, edgeInset: 12 };
+
 // Prima emerge una capsula e si tende in orizzontale (keyframe necessari
 // per il cambio di direzione); poi soft gonfia la finestra con squash/stretch.
 const shelfSpring: Transition = { ...soft, stiffness: 320, damping: 20 };
+// Chiusura a specchio: la superficie si sgonfia con la stessa molla
+// dell'inflate (niente tween piatto) e svanisce da barra — la pillola
+// non deve mai restare visibile (sui PC senza notch galleggerebbe da sola).
+const shelfDeflate: Transition = { ...shelfSpring, stiffness: 420, damping: 30 };
 const shelfEmerge: Transition = {
   type: "tween", duration: 0.3, times: [0, 0.32, 1],
   ease: [[0.16, 1, 0.3, 1], [0.45, 0, 0.2, 1]],
 };
 const shelfRetreat: Transition = {
-  type: "tween", duration: 0.3, times: [0, 0.68, 1],
-  ease: [[0.8, 0, 0.55, 1], [0.7, 0, 0.84, 0]],
+  type: "tween", duration: 0.3, times: [0, 0.45, 1],
+  ease: [[0.55, 0, 0.75, 0.4], [0.16, 1, 0.3, 1]],
 };
 
 export const shelfVariants: Variants = {

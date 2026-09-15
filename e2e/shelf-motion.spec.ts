@@ -18,7 +18,10 @@ test.describe("shelf bubble entrance", () => {
     const errors = watchConsole(page);
     // Il pulsante della library monta la shelf nello stesso documento:
     // possiamo campionare anche i primi frame, senza perdere rAF navigando.
-    await page.goto("/?view=library&heavy=36");
+    await page.goto("/?view=shelf&heavy=36");
+    await expectSettled(page);
+    await page.locator(".shelf-toolbar button").filter({ has: page.locator("svg.lucide-layout-grid") }).click();
+    await expect(page.locator(".library-close")).toBeVisible();
     await expect.poll(() => cards(page).count()).toBeGreaterThanOrEqual(36);
     // Termina l'ingresso della library prima di misurare quello della shelf.
     await expect(page.locator(".clip-tile").last()).toHaveCSS("opacity", "1");
@@ -109,6 +112,25 @@ test.describe("shelf bubble entrance", () => {
     await expectSettled(page);
     await expect(page.locator(".shelf-gleam")).toHaveCount(0);
     await expect(cards(page).first()).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test("Escape richiude la bolla e disabilita i controlli entro budget", async ({ page }) => {
+    const errors = watchConsole(page);
+    await page.goto("/?view=shelf&heavy=36");
+    await expectSettled(page);
+    let closeMs = 0;
+    const frames = await sampleFrames(page, 1000, async () => {
+      closeMs = await measureUntil(
+        () => page.keyboard.press("Escape"),
+        () => expect(page.locator(".shelf-window")).toHaveAttribute("data-state", "closed"),
+      );
+    });
+    expectBudget(closeMs, 1500, "shelf close + settle");
+    expectBudget(frames.p95, 120, "shelf close p95");
+    await expect(page.locator(".shelf-window")).toHaveCSS("opacity", "0");
+    await expect(page.locator(".shelf-window").locator("..")).toHaveAttribute("inert", "");
+    console.log(`shelf close: ${closeMs}ms, p95=${frames.p95.toFixed(1)}ms`);
     expect(errors).toEqual([]);
   });
 });

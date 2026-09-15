@@ -1,6 +1,7 @@
 import { motion, useReducedMotion } from "framer-motion";
 import { useT } from "../i18n";
 import type { AiAction } from "./prompts";
+import { menuVariants, menuItemVariants, snappy } from "../motion";
 
 /** Dropdown contestuale nella toolbar della preview: solo voci per il kind del clip.
  * Stesso look del menu "Copia come" (riga con icona + label, radius 16/10). */
@@ -13,10 +14,10 @@ export function AiMenu({ actions, disabledReason, onPick }: {
   const { t } = useT();
   return (
     <motion.div
-      initial={reduce ? false : { opacity: 0, y: -4, scale: 0.98 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: -4, scale: 0.98, transition: { duration: 0.1 } }}
-      transition={{ duration: 0.12 }}
+      variants={menuVariants}
+      initial={reduce ? false : "hidden"}
+      animate="shown"
+      exit={reduce ? { opacity: 0, transition: { duration: 0 } } : "exit"}
       className="ai-menu glass gpu"
       role="menu"
       aria-label={t("ai.menu")}
@@ -31,11 +32,11 @@ export function AiMenu({ actions, disabledReason, onPick }: {
       ) : (
         <div className="ai-menu-list nice-scroll">
           {actions.map((a) => (
-            <button key={a.id} type="button" role="menuitem" className="ai-menu-item" onClick={() => onPick(a)}>
+            <motion.button key={a.id} variants={menuItemVariants} whileTap={reduce ? undefined : { scale: 0.97 }} transition={snappy} type="button" role="menuitem" className="ai-menu-item" onClick={() => onPick(a)}>
               <span className="ai-menu-text">
                 <span className="ai-menu-label">{a.label}</span>
               </span>
-            </button>
+            </motion.button>
           ))}
         </div>
       )}

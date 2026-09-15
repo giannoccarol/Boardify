@@ -414,7 +414,7 @@ export function ClipPreview({ clip }: { clip: Clip }) {
 
       </div>
       <div className="preview-details">
-        <AiPanel ai={ai} clipId={clip.id} />
+        <AiPanel ai={ai} clipId={clip.id} onOpenLink={openExternal} />
         {url && meta?.title && meta.title !== meta.host && meta.title !== "YouTube" && meta.title !== "Vimeo" && <h2 className="preview-title">{meta.title}</h2>}
         {meta?.author && <p className="preview-author">{meta.author}</p>}
         {url && (

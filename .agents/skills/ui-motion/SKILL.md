@@ -1,6 +1,9 @@
 ---
 name: ui-motion
-description: Progetta e verifica le animazioni di Boardify: shelf elastica dal bordo superiore, menu contestuali, preview e feedback dei comandi. Usare per modifiche a motion, transizioni e microinterazioni della UI React/Tauri.
+description: >-
+  Progetta e verifica le animazioni di Boardify: shelf elastica dal bordo superiore,
+  menu contestuali, preview e feedback dei comandi. Usare per modifiche a motion,
+  transizioni e microinterazioni della UI React/Tauri.
 ---
 
 # UI Motion — Boardify
@@ -77,6 +80,15 @@ Riservare spazio a icone/etichette per evitare salti di layout.
   interno, poi la preview, poi la shelf. Non sottrarre focus per decorazioni.
 
 ## Liste, accessibilità e prestazioni
+
+- Scroll: usare lo scrolling nativo del browser (`scrollTo`/`scrollBy`), senza
+  tween di `scrollLeft` né trasformazioni dell'intera lista. Conservare il gesto
+  orizzontale e l'inerzia del trackpad; convertire la rotella verticale soltanto
+  sulle righe che hanno overflow. Accumulare la destinazione fra scatti, annullarla
+  al cambio di direzione o al tocco e lasciare propagare il gesto ai bordi.
+  `reduce` usa spostamenti immediati. Nessun render React per frame di scroll.
+  La navigazione a frecce mantiene visibile la clip selezionata e si ferma alle
+  card effettivamente presenti nella shelf.
 
 - Liste: `layout` + `AnimatePresence mode="popLayout"`, exit ~120 ms.
   `cardDelay(i) = min(i, 10) * 0.026` limita lo stagger. Niente spinner su refetch.
