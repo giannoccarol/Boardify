@@ -5,6 +5,8 @@ mod clipboard;
 mod db;
 mod detect;
 mod icons;
+#[cfg(target_os = "windows")]
+mod screen;
 mod source;
 mod watcher;
 
@@ -286,13 +288,30 @@ fn get_stats(state: State<AppState>) -> Result<serde_json::Value, String> {
 static CAPTURE_GEN: AtomicU64 = AtomicU64::new(0);
 
 fn fill_monitor(w: &tauri::WebviewWindow) {
-    let Ok(Some(monitor)) = w.current_monitor() else {
+    // current_monitor() su finestra nascosta può dare None/Err (shelf parte
+    // visible=false): senza fallback la finestra resta 1920x1080 e su un
+    // portatile più piccolo il contenuto centrato esce dalla viewport e
+    // sembra decentrato. Catena cross-platform, niente API OS-specifiche.
+    let monitor = w
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| w.primary_monitor().ok().flatten())
+        .or_else(|| {
+            w.available_monitors()
+                .ok()
+                .and_then(|ms| ms.into_iter().next())
+        });
+    let Some(monitor) = monitor else {
         return;
     };
     let screen = monitor.size();
     let mon = monitor.position();
     let _ = w.set_size(PhysicalSize::new(screen.width, screen.height));
     let _ = w.set_position(PhysicalPosition::new(mon.x, mon.y));
+    // set_position su Wayland è no-op (decide il compositor): center() è il
+    // fallback portabile. Con dimensione == monitor, centrata == fullscreen.
+    let _ = w.center();
 }
 
 fn show_labeled(app: &tauri::AppHandle, label: &str) {
@@ -438,6 +457,16 @@ fn set_inline_shortcut(state: State<AppState>, id: String, shortcut: Option<Stri
     db.set_inline_shortcut(&id, norm.as_deref()).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn edit_clip(state: State<AppState>, app: tauri::AppHandle, id: String, text: String) -> Result<Clip, String> {
+    let row = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.update_text(&id, text.trim()).map_err(|e| e.to_string())?
+    };
+    let _ = app.emit("clips-changed", ());
+    Ok(row.into())
+}
+
 fn ingest_clip(app: &tauri::AppHandle, text: &str, source: &str, title: &str) -> Result<(), String> {
     let state = app.state::<AppState>();
     let mut hash = state.last_hash.lock().map_err(|e| e.to_string())?;
@@ -570,7 +599,32 @@ fn run_color_picker() -> Result<String, String> {
 /// Compila e degrada con messaggio chiaro invece di shell-out Linux.
 #[cfg(target_os = "windows")]
 fn run_color_picker() -> Result<String, String> {
-    Err("color picker non ancora supportato su Windows".into())
+    // Dialogo colore nativo (comdlg32): modale, con custom colors azzerati.
+    use windows::Win32::Foundation::{COLORREF, HWND};
+    use windows::Win32::UI::Controls::Dialogs::{
+        ChooseColorW, CHOOSECOLORW, CC_FULLOPEN, CC_RGBINIT,
+    };
+    let mut custom = [COLORREF(0); 16];
+    let mut cc = CHOOSECOLORW {
+        lStructSize: size_of::<CHOOSECOLORW>() as u32,
+        hwndOwner: HWND::default(),
+        rgbResult: COLORREF(0),
+        lpCustColors: custom.as_mut_ptr(),
+        Flags: CC_FULLOPEN | CC_RGBINIT,
+        ..Default::default()
+    };
+    let ok = unsafe { ChooseColorW(&mut cc) };
+    if !ok.as_bool() {
+        return Err("nessun colore selezionato".into());
+    }
+    // COLORREF = 0x00BBGGRR.
+    let v = cc.rgbResult.0;
+    Ok(format!(
+        "#{:02X}{:02X}{:02X}",
+        v & 0xFF,
+        (v >> 8) & 0xFF,
+        (v >> 16) & 0xFF
+    ))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
@@ -604,7 +658,11 @@ fn ocr_region() -> Result<String, String> {
 /// `tesseract` sotto resta cross-platform (se installato e nel PATH).
 #[cfg(target_os = "windows")]
 fn ocr_region() -> Result<String, String> {
-    Err("cattura testo da schermo non ancora supportata su Windows (serve uno strumento di cattura regione + tesseract)".into())
+    // GDI non offre selezione regione senza UI dedicata: catturiamo il monitor
+    // primario intero e lasciamo a tesseract il resto. Serve `tesseract` nel PATH
+    // (es. build UB Mannheim).
+    let path = screen::capture_primary()?;
+    tesseract(&path)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
@@ -784,6 +842,7 @@ fn main() {
             hide_window,
             toggle_pin,
             set_inline_shortcut,
+            edit_clip,
             insert_note,
             apply_watch_settings,
             pick_color,

@@ -40,9 +40,9 @@ Boardify compila e gira su Linux E Windows. Regole:
   | Area | Linux | Windows |
   |---|---|---|
   | Finestra attiva (`source.rs`) | Hyprland/niri/Sway/KDE/X11 | `active-win-pos-rs` (foreground window), fallback `Unknown` |
-  | Icone app (`icons.rs`) | Freedesktop (temi + `.desktop`) | stub → `None` (TODO: estrarre icone `.exe`) |
-  | Color picker | `hyprpicker`/`kcolorchooser`/`gpick` | non supportato, errore chiaro |
-  | OCR/screenshot testo | `slurp`+`grim` / `spectacle` + `tesseract` | non supportato, errore chiaro (`tesseract` resta cross-platform) |
+  | Icone app (`icons.rs`) | Freedesktop (temi + `.desktop`) | icona dall'`.exe` (`ToolHelp` → `ExtractIconExW` → PNG 32x32) |
+  | Color picker | `hyprpicker`/`kcolorchooser`/`gpick` | dialogo nativo `ChooseColorW` |
+  | OCR/schermo (`screen.rs`) | `slurp`+`grim` / `spectacle` + `tesseract` | cattura GDI monitor primario + `tesseract` nel PATH |
   | Watcher clipboard | `arboard` poll 500 ms | stesso codice |
   | DB / immagini | `dirs::data_dir()` | stesso codice |
   | Shortcut globali | Tauri `global-shortcut` (`Super` = tasto Win su Windows) | stesso codice, testare la stringa su entrambi |

@@ -7,7 +7,7 @@ import { byteSize, imageDimensions, prettyApp, timeAgo } from "../types";
 import { extractUrl, loadLinkMeta, parseMedia, type LinkMeta } from "../linkMeta";
 import { copyPlain, toHtml, toMarkdown, toQrSvg } from "../linkActions";
 import { clipColor, contrastRatio, formatColor, harmonies, isDataImage, isSvgMarkup, parseGradientCss, wcagBadge } from "../color";
-import { guessLang } from "../code";
+import { formatCode, guessLang, tokensByLine, tokenizeCode } from "../code";
 import { parseUnit } from "../units";
 import { extractEmail, extractFilePath, extractPhone, extractPlaceholders, isAbsolutePath, isDirectVideo, isLikelyAddress, isQrPayload, isVideoUrl, toMapsUrl } from "../smartActions";
 import { useBoardify } from "../store";
@@ -221,9 +221,13 @@ export function ClipPreview({ clip }: { clip: Clip }) {
           <img src={meta.thumbnail} alt="" className="preview-media w-full max-h-[280px] object-cover" />
         </button>
       ) : (
-        <pre className={`preview-text nice-scroll ${clip.kind === "code" ? "is-code" : ""}`}>
-          {clip.text ?? clip.preview}
-        </pre>
+        clip.kind === "code" ? (
+          <CodeView text={clip.text ?? clip.preview} lang={lang?.lang ?? null} />
+        ) : (
+          <pre className="preview-text nice-scroll">
+            {clip.text ?? clip.preview}
+          </pre>
+        )
       )}
 
       </div>
@@ -311,6 +315,31 @@ export function ClipPreview({ clip }: { clip: Clip }) {
         <span className="preview-footer-hint"><kbd>Esc</kbd> {t("library.footerClose")}</span>
       </footer>
     </motion.div>
+  );
+}
+
+function CodeView({ text, lang }: { text: string; lang: string | null }) {
+  const formatted = useMemo(() => formatCode(text), [text]);
+  const lines = useMemo(() => tokensByLine(tokenizeCode(formatted, lang)), [formatted, lang]);
+  return (
+    <div className="code-block nice-scroll" role="code" aria-label="code snippet">
+      {lines.map((toks, i) => (
+        <div key={i} className="code-line">
+          <span className="code-no" aria-hidden="true">{i + 1}</span>
+          <code className="code-text">
+            {toks.length === 0 ? (
+              "\n"
+            ) : (
+              toks.map((t, j) => (
+                <span key={j} className={t.kind === "plain" ? undefined : `tok-${t.kind}`}>
+                  {t.text}
+                </span>
+              ))
+            )}
+          </code>
+        </div>
+      ))}
+    </div>
   );
 }
 

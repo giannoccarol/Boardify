@@ -361,7 +361,9 @@ kbd { font-family: inherit; font-size: 10px; border-radius: 5px; border: 1px sol
 
 
 /* Detail panel: same surface as the shelf, no zoom or height animation. */
-.shelf-stage { overflow-y: auto; padding-bottom: 20px; }
+.shelf-stage { overflow-y: auto; overflow-x: hidden; padding-bottom: 20px; box-sizing: border-box; }
+.shelf-stage > div { margin-inline: auto; max-width: 100%; }
+.shelf-window { margin-inline: auto; }
 .clip-preview { width: 720px; max-width: calc(100vw - 36px); margin-top: 12px; border-radius: 24px; overflow: hidden; user-select: none; display: flex; flex-direction: column; max-height: min(680px, calc(100vh - 90px)); background: linear-gradient(145deg, #17181a, #0e0f11 70%); }
 .preview-toolbar { display: flex; align-items: center; gap: 6px; padding: 12px; min-height: 56px; flex-shrink: 0; }
 .preview-type, .preview-info-chip { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; background: #ffffff06; color: #a4a4aa; padding: 5px 9px; font-size: 10px; white-space: nowrap; }
@@ -377,6 +379,21 @@ kbd { font-family: inherit; font-size: 10px; border-radius: 5px; border: 1px sol
 .preview-color { height: 180px; }
 .preview-text { max-height: 280px; min-height: 112px; margin: 0; overflow: auto; padding: 20px; border-radius: 14px; background: #202124; border: 1px solid #ffffff07; color: #e1e1e5; font-family: inherit; font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .preview-text.is-code { font-family: ui-monospace, monospace; font-size: 12px; }
+/* Blocco codice stile VS Code Dark+: gutter + token colors. */
+.code-block { max-height: 280px; min-height: 112px; overflow: auto; padding: 12px 0; border-radius: 14px; background: #1e1e1e; border: 1px solid #ffffff12; color: #d4d4d4; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.7; user-select: text; }
+.code-line { display: flex; min-width: max-content; padding-right: 16px; }
+.code-line:hover { background: #ffffff08; }
+.code-no { user-select: none; flex-shrink: 0; width: 3em; text-align: right; padding-right: 12px; margin-right: 12px; margin-left: 4px; color: #858585; position: sticky; left: 0; background: #1e1e1e; }
+.code-text { white-space: pre; }
+.tok-kw, .tok-tag { color: #569cd6; }
+.tok-str { color: #ce9178; }
+.tok-com { color: #6a9955; font-style: italic; }
+.tok-num { color: #b5cea8; }
+.tok-fn { color: #dcdcaa; }
+.tok-type { color: #4ec9b0; }
+.tok-var { color: #9cdcfe; }
+.tok-sel { color: #d7ba7d; }
+.tok-pun { color: #808080; }
 .preview-details { padding: 0 16px 14px; }
 .preview-details:empty { padding-bottom: 12px; }
 .preview-title { margin: 15px 0 0; color: #ececef; font-size: 13px; line-height: 1.5; font-weight: 550; }

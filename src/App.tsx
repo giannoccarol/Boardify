@@ -57,7 +57,7 @@ export default function BoardifyApp() {
 
   if (view === "capture") {
     return (
-      <div className={`w-screen h-screen flex items-start justify-center pt-2 ${stage}`}>
+      <div className={`w-full h-full flex items-start justify-center pt-2 ${stage}`}>
         <CaptureBar />
       </div>
     );
@@ -65,7 +65,7 @@ export default function BoardifyApp() {
 
   if (view === "settings") {
     return (
-      <div className={`w-screen h-screen window-stage ${stage}`}>
+      <div className={`w-full h-full window-stage ${stage}`}>
         <Settings />
       </div>
     );
@@ -74,7 +74,7 @@ export default function BoardifyApp() {
   if (view === "shelf") {
     return (
       <div
-        className={`shelf-stage nice-scroll w-screen h-screen flex items-start justify-center pt-2.5 ${stage}`}
+        className={`shelf-stage nice-scroll w-full h-full flex items-start justify-center pt-2.5 ${stage}`}
         onMouseDown={(e) => {
           if (e.target !== e.currentTarget) return;
           dismissShelfBackdrop();
@@ -86,7 +86,7 @@ export default function BoardifyApp() {
   }
 
   return (
-    <div className={`w-screen h-screen window-stage ${stage}`}>
+    <div className={`w-full h-full window-stage ${stage}`}>
       <Library />
     </div>
   );

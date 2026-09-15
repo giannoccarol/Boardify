@@ -73,7 +73,7 @@ npm install
 npm run tauri dev
 ```
 
-Dipendenze di sistema: `webkit2gtk-4.1`, `base-devel`, `openssl`, `appmenu-gtk-module`, `gtk3`, `librsvg`, `libvips`, `patchelf`, `tesseract`. Opzionali: `slurp`+`grim` o `spectacle` per il testo da schermo, `hyprpicker`/`kcolorchooser` per i colori.
+Dipendenze di sistema (Linux): `webkit2gtk-4.1`, `base-devel`, `openssl`, `appmenu-gtk-module`, `gtk3`, `librsvg`, `libvips`, `patchelf`, `tesseract`. Opzionali: `slurp`+`grim` o `spectacle` per il testo da schermo, `hyprpicker`/`kcolorchooser` per i colori. Su Windows bastano WebView2 (già nel sistema) e `tesseract` nel PATH per il testo da schermo; build con `npm run tauri build`.
 
 Solo UI, dati finti, niente Tauri:
 

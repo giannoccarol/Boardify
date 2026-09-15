@@ -46,6 +46,7 @@ interface BoardifyState {
   toggleFav: (id: string) => Promise<void>;
   togglePin: (id: string) => Promise<void>;
   setShortcut: (id: string, shortcut: string | null) => Promise<void>;
+  editClip: (id: string, text: string) => Promise<void>;
   deleteClip: (id: string) => Promise<void>;
   combineSelected: () => Promise<void>;
   createCategory: (name: string) => Promise<void>;
@@ -298,6 +299,20 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
     set((s) => ({
       clips: s.clips.map((c) => (c.id === id ? { ...c, inline_shortcut: value } : c)),
     }));
+  },
+  editClip: async (id, text) => {
+    const t = text.trim();
+    if (!t) throw new Error("empty");
+    if (isTauri()) {
+      const updated = await invoke<Clip>("edit_clip", { id, text: t });
+      set((s) => ({ clips: s.clips.map((c) => (c.id === id ? updated : c)) }));
+    } else {
+      set((s) => ({
+        clips: s.clips.map((c) =>
+          c.id === id ? { ...c, text: t, preview: t.slice(0, 220) || c.preview } : c
+        ),
+      }));
+    }
   },
   deleteClip: async (id) => {
     if (isTauri()) await invoke("delete_clip", { id });

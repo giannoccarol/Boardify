@@ -1,6 +1,7 @@
 //! Risolve l'icona di un'app a partire dal process name.
-//! Linux: temi Freedesktop + file `.desktop`. Windows: non ancora risolto
-//! (TODO: estrarre l'icona dall'`.exe`), `resolve_data_url` restituisce `None`.
+//! Linux: temi Freedesktop + file `.desktop`.
+//! Windows: icona estratta dall'`.exe` (snapshot processi → `ExtractIconExW`,
+//! resa 32x32 con alpha via DIB).
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -43,11 +44,28 @@ pub fn resolve_data_url(app: &str) -> Option<String> {
     if let Some(hit) = cache.get(&key) {
         return hit.clone();
     }
-    let found = lookup(&key).and_then(|p| file_to_data_url(&p));
+    let found = lookup_data_url(&key);
     cache.insert(key, found.clone());
     found
 }
 
+#[cfg(target_os = "linux")]
+fn lookup_data_url(key: &str) -> Option<String> {
+    lookup(key).and_then(|p| file_to_data_url(&p))
+}
+
+#[cfg(target_os = "windows")]
+fn lookup_data_url(key: &str) -> Option<String> {
+    windows_icon_data_url(key)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+fn lookup_data_url(key: &str) -> Option<String> {
+    let _ = key;
+    None
+}
+
+#[cfg(target_os = "linux")]
 fn file_to_data_url(path: &Path) -> Option<String> {
     let bytes = std::fs::read(path).ok()?;
     if bytes.is_empty() || bytes.len() > 120_000 {
@@ -117,17 +135,9 @@ fn aliases(name: &str) -> Vec<String> {
     out
 }
 
+#[cfg(target_os = "linux")]
 fn lookup(name: &str) -> Option<PathBuf> {
-    #[cfg(target_os = "linux")]
-    {
-        return linux_lookup(name);
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        // TODO(windows): risolvere l'icona dall'eseguibile (estrazione `.exe`).
-        let _ = name;
-        None
-    }
+    return linux_lookup(name);
 }
 
 #[cfg(target_os = "linux")]
@@ -291,6 +301,173 @@ fn lookup_icon_name(icon: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+// ── Windows: icona dall'eseguibile ─────────────────────────────
+// `source.rs` ci dà il process name (es. `chrome.exe`); qui lo risolviamo
+// in percorso `.exe` via snapshot dei processi e ne estraiamo l'icona.
+// Cache: `resolve_data_url` sopra (una lookup per app).
+
+/// Data URL PNG 32x32 dell'icona del processo `key`, oppure `None`.
+#[cfg(target_os = "windows")]
+fn windows_icon_data_url(key: &str) -> Option<String> {
+    let path = windows_exe_path(key)?;
+    let png = windows_exe_icon_png(&path, 32)?;
+    if png.is_empty() || png.len() > 120_000 {
+        return None;
+    }
+    Some(format!("data:image/png;base64,{}", STANDARD.encode(png)))
+}
+
+/// Percorso completo dell'`.exe` il cui nome matcha `key` o un suo alias.
+#[cfg(target_os = "windows")]
+fn windows_exe_path(key: &str) -> Option<String> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows::core::PWSTR;
+
+    let wanted: Vec<String> = aliases(key)
+        .iter()
+        .flat_map(|a| {
+            let a = a.to_lowercase();
+            if a.ends_with(".exe") {
+                vec![a]
+            } else {
+                vec![format!("{a}.exe"), a]
+            }
+        })
+        .collect();
+
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;
+        let pid = {
+            let mut entry = PROCESSENTRY32W {
+                dwSize: size_of::<PROCESSENTRY32W>() as u32,
+                ..Default::default()
+            };
+            let mut found = None;
+            if Process32FirstW(snap, &mut entry).is_ok() {
+                loop {
+                    let len = entry
+                        .szExeFile
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(entry.szExeFile.len());
+                    let exe =
+                        String::from_utf16_lossy(&entry.szExeFile[..len]).to_lowercase();
+                    if wanted.iter().any(|w| w == &exe) {
+                        found = Some(entry.th32ProcessID);
+                        break;
+                    }
+                    if Process32NextW(snap, &mut entry).is_err() {
+                        break;
+                    }
+                }
+            }
+            found
+        };
+        let _ = CloseHandle(snap);
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid?).ok()?;
+        let mut buf = [0u16; 1024];
+        let mut size = buf.len() as u32;
+        let status =
+            QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut size);
+        let _ = CloseHandle(handle);
+        status.ok()?;
+        String::from_utf16(buf.get(..size as usize)?).ok()
+    }
+}
+
+/// Icona grande dell'`.exe` resa a `size`px con alpha, codificata PNG.
+#[cfg(target_os = "windows")]
+fn windows_exe_icon_png(exe_path: &str, size: i32) -> Option<Vec<u8>> {
+    use windows::Win32::UI::Shell::ExtractIconExW;
+    use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, HICON};
+    use windows::core::HSTRING;
+
+    unsafe {
+        let mut large = HICON::default();
+        let n = ExtractIconExW(
+            &HSTRING::from(exe_path),
+            0,
+            Some(&mut large as *mut HICON),
+            None,
+            1,
+        );
+        if n == 0 || large.is_invalid() {
+            return None;
+        }
+        let png = windows_hicon_to_png(large, size);
+        let _ = DestroyIcon(large);
+        png
+    }
+}
+
+/// `HICON` → PNG: disegno su DIB 32bpp top-down (l'alpha sopravvive).
+#[cfg(target_os = "windows")]
+fn windows_hicon_to_png(icon: windows::Win32::UI::WindowsAndMessaging::HICON, size: i32) -> Option<Vec<u8>> {
+    use windows::Win32::Graphics::Gdi::*;
+    use windows::Win32::UI::WindowsAndMessaging::{DrawIconEx, DI_NORMAL};
+
+    unsafe {
+        let screen = GetDC(None);
+        if screen.is_invalid() {
+            return None;
+        }
+        let mem = CreateCompatibleDC(Some(screen));
+        if mem.is_invalid() {
+            ReleaseDC(None, screen);
+            return None;
+        }
+        let out = (|| {
+            let mut info = BITMAPINFO::default();
+            info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+            info.bmiHeader.biWidth = size;
+            info.bmiHeader.biHeight = -size; // top-down
+            info.bmiHeader.biPlanes = 1;
+            info.bmiHeader.biBitCount = 32;
+            info.bmiHeader.biCompression = BI_RGB.0;
+            let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+            let dib = CreateDIBSection(Some(mem), &info, DIB_RGB_COLORS, &mut bits, None, 0).ok()?;
+            let old = SelectObject(mem, dib.into());
+            DrawIconEx(mem, 0, 0, icon, size, size, 0, None, DI_NORMAL).ok()?;
+            let n = (size as usize) * (size as usize) * 4;
+            let mut bgra = vec![0u8; n];
+            let lines = GetDIBits(
+                mem,
+                dib,
+                0,
+                size as u32,
+                Some(bgra.as_mut_ptr() as *mut core::ffi::c_void),
+                &mut info,
+                DIB_RGB_COLORS,
+            );
+            SelectObject(mem, old);
+            let _ = DeleteObject(dib.into());
+            if lines == 0 {
+                return None;
+            }
+            // BGRA → RGBA.
+            for px in bgra.chunks_exact_mut(4) {
+                px.swap(0, 2);
+            }
+            let img = image::RgbaImage::from_raw(size as u32, size as u32, bgra)?;
+            let mut png = Vec::new();
+            img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .ok()?;
+            Some(png)
+        })();
+        let _ = DeleteDC(mem);
+        ReleaseDC(None, screen);
+        out
+    }
 }
 
 #[cfg(test)]

@@ -12,7 +12,7 @@ import { AppBadge } from "./AppBadge";
 import { extractUrl, parseMedia } from "../linkMeta";
 import { cardDelay, snappy, spring } from "../motion";
 import { clipColor, isDataImage, isDarkColor, isSvgMarkup, parseGradientCss, formatColor, type ColorFmt } from "../color";
-import { guessLang } from "../code";
+import { formatCode, guessLang } from "../code";
 import { parseUnit } from "../units";
 import { useT } from "../i18n";
 
@@ -298,7 +298,7 @@ function CardFace({ clip }: { clip: Clip }) {
           <Link2 className="w-5 h-5 text-zinc-500 mb-1.5" />
         ) : null}
         <p className={`leading-snug text-zinc-100 line-clamp-4 whitespace-pre-wrap break-words ${clip.kind === "code" ? "font-mono text-[11.5px]" : "text-[12.5px]"}`}>
-          {clip.is_sensitive ? "••••••••" : (clip.text || clip.preview).trim()}
+          {clip.is_sensitive ? "••••••••" : (clip.kind === "code" ? formatCode(clip.text || clip.preview) : (clip.text || clip.preview).trim())}
         </p>
         {unit && (
           <p className="mt-1 font-mono text-[11px] text-emerald-300 truncate">

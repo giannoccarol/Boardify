@@ -544,6 +544,77 @@ impl Db {
         Ok(())
     }
 
+    pub fn update_text(&self, id: &str, new_text: &str) -> SqlResult<ClipRow> {
+        let t = new_text.trim();
+        if t.is_empty() || t.chars().count() > 100_000 {
+            return Err(rusqlite::Error::InvalidParameterName("vuoto/troppo grande".into()));
+        }
+        let existing = self.get(id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+        // Solo clip testuali: immagini/file hanno payload binario o path, non testo libero.
+        if existing.kind == "image" || existing.kind == "file" || existing.image_path.is_some() {
+            return Err(rusqlite::Error::InvalidParameterName("solo clip di testo".into()));
+        }
+        if existing.text.as_deref().unwrap_or("") == t {
+            return Ok(existing);
+        }
+        let kind = crate::detect::detect_kind(t).to_string();
+        let color = crate::detect::extract_color(t);
+        let sensitive = crate::detect::is_sensitive(t);
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(t.as_bytes());
+        let hash = format!("{:x}", h.finalize())[..16].to_string();
+        self.conn.execute(
+            "UPDATE clips SET text=?1, kind=?2, color_hex=?3, is_sensitive=?4, hash=?5 WHERE id=?6",
+            params![t, kind, color, sensitive as i64, hash, id],
+        )?;
+        // Ricalcola solo le faccette smart, le custom dell'utente restano.
+        // Stessa tassonomia di insert_text/migrate: History sempre + kind/faccette.
+        let mut extras = vec!["History"];
+        match kind.as_str() {
+            "color" => extras.push("Colors"),
+            "image" => extras.push("Assets"),
+            "file" => extras.push("File"),
+            "code" => extras.push("Snippet"),
+            "link" => {
+                extras.push("Link");
+                extras.push("QR Code");
+                if crate::detect::is_video_url(t) {
+                    extras.push("Video");
+                }
+            }
+            _ => {
+                if crate::detect::is_email(t) {
+                    extras.push("Email");
+                }
+                if crate::detect::is_template(t) {
+                    extras.push("Template");
+                }
+                if crate::detect::is_qr_payload(t) {
+                    extras.push("QR Code");
+                }
+                if crate::detect::is_video_url(t) {
+                    extras.push("Video");
+                }
+            }
+        }
+        self.conn.execute(
+            "DELETE FROM clip_categories WHERE clip_id=?1 AND category_id IN
+             (SELECT id FROM categories WHERE name IN
+              ('History','Snippet','Link','QR Code','Email','Template','Video','Colors','Assets','File'))",
+            params![id],
+        )?;
+        for name in extras {
+            if let Ok(Some(cat)) = self.category_by_name(name) {
+                let _ = self.conn.execute(
+                    "INSERT OR IGNORE INTO clip_categories (clip_id, category_id) VALUES (?1,?2)",
+                    params![id, cat.id],
+                );
+            }
+        }
+        Ok(self.get(id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?)
+    }
+
     pub fn set_ocr(&self, id: &str, ocr: &str) -> SqlResult<()> {
         self.conn
             .execute("UPDATE clips SET ocr_text=?1 WHERE id=?2", params![ocr, id])?;
