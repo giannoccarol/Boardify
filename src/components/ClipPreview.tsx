@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { motion, useReducedMotion } from "framer-motion";
-import { Copy, ExternalLink, Link2, X, Pin, Star, QrCode, Mail, Phone, MapPin, FolderOpen, Image as ImageIcon, FileText, Code2, Palette, Clock3, Check, Sparkles } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { Check, ChevronDown, Copy, ExternalLink, Link2, X, Pin, Star, QrCode, Mail, Phone, MapPin, FolderOpen, Image as ImageIcon, FileText, Code2, Palette, Clock3, Hash, Sparkles } from "lucide-react";
 import { useClipImageSrc } from "../clipImage";
 import type { Clip } from "../types";
 import { byteSize, imageDimensions, prettyApp, timeAgo } from "../types";
@@ -33,6 +33,9 @@ export function ClipPreview({ clip }: { clip: Clip }) {
   const [loadedMeta, setLoadedMeta] = useState<{ url: string; value: LinkMeta } | null>(null);
   const meta = loadedMeta?.url === url ? loadedMeta.value : url ? parseMedia(url) : null;
   const [showQr, setShowQr] = useState(false);
+  const [copyOpen, setCopyOpen] = useState(false);
+  const [copiedOpt, setCopiedOpt] = useState<string | null>(null);
+  const copyWrapRef = useRef<HTMLDivElement | null>(null);
   // QR: link oppure payload testuali (WIFI:/otpauth/vCard) che stanno nella categoria QR Code
   const qrTarget = useMemo(() => {
     if (url) return url;
@@ -64,12 +67,33 @@ export function ClipPreview({ clip }: { clip: Clip }) {
     };
   }, [url]);
 
-  useEffect(() => { setShowQr(false); setCopied(false); }, [clip.id]);
+  useEffect(() => { setShowQr(false); setCopied(false); setCopyOpen(false); setCopiedOpt(null); }, [clip.id]);
   useEffect(() => {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(false), 1200);
     return () => clearTimeout(timer);
   }, [copied]);
+  useEffect(() => {
+    if (!copiedOpt) return;
+    const timer = setTimeout(() => setCopiedOpt(null), 1200);
+    return () => clearTimeout(timer);
+  }, [copiedOpt]);
+
+  useEffect(() => {
+    if (!copyOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (copyWrapRef.current && !copyWrapRef.current.contains(e.target as Node)) setCopyOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCopyOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [copyOpen]);
 
   const openExternal = async (u: string) => {
     if (isTauri()) {
@@ -204,10 +228,84 @@ export function ClipPreview({ clip }: { clip: Clip }) {
         {dimensions && <span className="preview-info-chip">{dimensions}</span>}
         <span className="preview-info-chip">{byteSize(clip)}</span>
         <div className="preview-tools">
-          <Tool title={copied ? t("card.copied") : t("action.copy")} active={copied} onClick={async () => { if (await s.copyClip(clip.id)) setCopied(true); }}>
-            {copied ? <Check size={13} /> : <Copy size={13} />}
-            <span>{copied ? t("card.copied") : t("action.copy")}</span>
-          </Tool>
+          <div ref={copyWrapRef} className="copy-menu-wrap">
+            <div className={`copy-split ${copied ? "is-active" : ""} ${copyOpen ? "is-open" : ""}`}>
+              <button
+                type="button"
+                title={copied ? t("card.copied") : t("action.copy")}
+                aria-label={copied ? t("card.copied") : t("action.copy")}
+                onClick={async () => { if (await s.copyClip(clip.id)) setCopied(true); }}
+                className="copy-split-main"
+              >
+                {copied ? <Check size={13} /> : <Copy size={13} />}
+                <span className="copy-split-label">{copied ? t("card.copied") : t("action.copy")}</span>
+              </button>
+              {copyOptions.length > 0 && (
+                <>
+                  <span className="copy-split-divider" aria-hidden="true" />
+                  <button
+                    type="button"
+                    title={t("library.copyAs")}
+                    aria-label={t("library.copyAs")}
+                    aria-haspopup="menu"
+                    aria-expanded={copyOpen}
+                    onClick={() => setCopyOpen((v) => !v)}
+                    className="copy-split-toggle"
+                  >
+                    <ChevronDown size={13} className={`copy-chevron ${copyOpen ? "is-open" : ""}`} />
+                  </button>
+                </>
+              )}
+            </div>
+            <AnimatePresence>
+              {copyOpen && copyOptions.length > 0 && (
+                <motion.div
+                  initial={reduce ? false : { opacity: 0, y: -4, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -4, scale: 0.98, transition: { duration: 0.1 } }}
+                  transition={{ duration: 0.12 }}
+                  className="copy-menu glass gpu"
+                  role="menu"
+                  aria-label={t("library.copyAs")}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <div className="copy-menu-head">
+                    <span className="eyebrow">{t("library.copyAs")}</span>
+                    <span className="copy-menu-count">{copyOptions.length}</span>
+                  </div>
+                  <div className="copy-menu-list nice-scroll">
+                    {copyOptions.map((o) => {
+                      const label = t(o.labelKey, o.params);
+                      const Icon = copyOptionIcon(o.id);
+                      const preview = copyOptionPreview(o.id, o.value);
+                      const done = copiedOpt === o.id;
+                      return (
+                        <button
+                          key={o.id}
+                          type="button"
+                          role="menuitem"
+                          className={`copy-menu-item ${done ? "is-done" : ""}`}
+                          onClick={async () => {
+                            await s.copyText(o.value);
+                            setCopiedOpt(o.id);
+                            setCopied(true);
+                            setCopyOpen(false);
+                          }}
+                        >
+                          <span className="copy-menu-icon"><Icon size={13} /></span>
+                          <span className="copy-menu-text">
+                            <span className="copy-menu-label">{label}</span>
+                            {preview && <span className="copy-menu-value">{preview}</span>}
+                          </span>
+                          {done && <Check size={13} className="copy-menu-check" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
           {url && (
             <Tool title={t("library.openInBrowser")} onClick={open}>
               <ExternalLink className="w-3.5 h-3.5" />
@@ -284,16 +382,6 @@ export function ClipPreview({ clip }: { clip: Clip }) {
       </div>
       <div className="preview-details">
         <AiPanel ai={ai} clipId={clip.id} />
-        {copyOptions.length > 0 && (
-          <div className="mt-3">
-            <p className="eyebrow">{t("library.copyAs")}</p>
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
-              {copyOptions.map((o) => (
-                <MiniBtn key={o.id} label={t(o.labelKey, o.params)} onClick={() => s.copyText(o.value)} />
-              ))}
-            </div>
-          </div>
-        )}
         {url && meta?.title && meta.title !== meta.host && meta.title !== "YouTube" && meta.title !== "Vimeo" && <h2 className="preview-title">{meta.title}</h2>}
         {meta?.author && <p className="preview-author">{meta.author}</p>}
         {url && (
@@ -427,6 +515,32 @@ function ColorDetails({ hex }: { hex: string }) {
       </div>
     </div>
   );
+}
+
+function copyOptionIcon(id: string) {
+  if (id === "qr-svg") return QrCode;
+  if (id === "email") return Mail;
+  if (id === "phone" || id === "phone-tel") return Phone;
+  if (id === "address") return MapPin;
+  if (["hex", "hex-short", "rgb", "rgba", "hsl", "css-var", "tailwind"].includes(id)) return Palette;
+  if (["url", "markdown", "html", "title"].includes(id)) return Link2;
+  if (["fenced", "formatted", "one-line"].includes(id)) return Code2;
+  if (["path", "uri", "name", "parent", "all-paths", "file-names"].includes(id)) return FolderOpen;
+  if (["data-url", "dims"].includes(id)) return ImageIcon;
+  if (id.startsWith("unit-")) return Hash;
+  return FileText;
+}
+
+function copyOptionPreview(id: string, value: string): string | null {
+  const v = value.trim();
+  if (!v) return null;
+  if (id === "qr-svg" || v.startsWith("<svg")) return `SVG · ${v.length} chars`;
+  if (id === "data-url" || v.startsWith("data:")) {
+    const kb = v.length / 1024;
+    return kb >= 1 ? `Data-URL · ${kb.toFixed(1)} KB` : `Data-URL · ${v.length} chars`;
+  }
+  const oneLine = v.replace(/\s+/g, " ");
+  return oneLine.length > 64 ? `${oneLine.slice(0, 64)}…` : oneLine;
 }
 
 function MiniBtn({ label, onClick, icon }: { label: string; onClick: () => void; icon?: ReactNode }) {

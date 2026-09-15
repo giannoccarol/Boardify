@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode, type MouseEvent } from "react";
-import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type MouseEvent } from "react";
+import { motion, AnimatePresence, useAnimationControls, useReducedMotion } from "framer-motion";
 import { Search, Star, LayoutGrid, Pin, Settings2, StickyNote, X, Menu } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
@@ -12,7 +12,7 @@ import { groupClips } from "../types";
 import { KIND_IDS } from "../settings";
 import { useT } from "../i18n";
 import { isTauri } from "../demo";
-import { shelfVariants, spring } from "../motion";
+import { shelfVariants, shelfSeedVariants, shelfContentVariants, shelfGleamVariants, spring } from "../motion";
 
 export function Shelf() {
   const s = useBoardify();
@@ -24,6 +24,26 @@ export function Shelf() {
   const [tick, setTick] = useState(0);
   const [note, setNote] = useState("");
   const reduce = useReducedMotion();
+  const entrance = useAnimationControls();
+
+  useLayoutEffect(() => {
+    // La finestra Tauri resta montata mentre è nascosta. Ripartiamo ad ogni
+    // window-shown senza rimontare card, input e contenitori con lo scroll.
+    entrance.stop();
+    if (reduce) {
+      entrance.set("shown");
+      return;
+    }
+    let cancelled = false;
+    entrance.set("hidden");
+    void entrance.start("emerge").then(() => {
+      if (!cancelled) void entrance.start("shown");
+    });
+    return () => {
+      cancelled = true;
+      entrance.stop();
+    };
+  }, [entrance, reduce, tick]);
 
   useEffect(() => {
     s.refresh();
@@ -85,16 +105,28 @@ export function Shelf() {
   };
 
   return (
-    <div className="flex flex-col items-center w-full pointer-events-none">
+    <div className="relative flex flex-col items-center w-full pointer-events-none">
+      {!reduce && (
+        <motion.div
+          aria-hidden="true"
+          className="shelf-seed glass gpu"
+          variants={shelfSeedVariants}
+          initial="hidden"
+          animate={entrance}
+        />
+      )}
       <motion.div
-        key={tick}
-        variants={reduce ? undefined : shelfVariants}
+        variants={shelfVariants}
         initial={reduce ? false : "hidden"}
-        animate="shown"
-        transition={spring}
+        animate={entrance}
+        exit="exit"
         className="shelf-window glass gpu pointer-events-auto w-[1040px] max-w-[96vw] overflow-hidden select-none relative"
         {...stop}
       >
+        {!reduce && (
+          <motion.div aria-hidden="true" className="shelf-gleam gpu" variants={shelfGleamVariants} />
+        )}
+        <motion.div className="shelf-reveal gpu" variants={shelfContentVariants}>
         <div className="shelf-toolbar" data-tauri-drag-region>
 
           <Brand compact />
@@ -205,6 +237,7 @@ export function Shelf() {
         </div>
 
         <div className="shelf-footer"><span><span className="status-dot" /> {s.clips.length === 1 ? t("shelf.footerCountOne") : t("shelf.footerCount", { count: s.clips.length })}</span><span><kbd>{t("kbd.space")}</kbd> {t("shelf.footerPreview")} <kbd>{t("kbd.enter")}</kbd> {t("shelf.footerCopy")}</span></div>
+        </motion.div>
         <AnimatePresence>
           {s.noteOpen && (
             <motion.div
