@@ -9,6 +9,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "e2e": "playwright test",
     "start": "tauri dev",
     "app": "./scripts/launch.sh",
     "shots": "node scripts/shots.mjs"
@@ -29,6 +30,7 @@
     "zustand": "^5.0.6"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/vite": "^4.1.11",
     "@tauri-apps/cli": "^2.11.4",
     "@types/qrcode-generator": "^0.0.16",

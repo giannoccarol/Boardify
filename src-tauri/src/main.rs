@@ -222,6 +222,19 @@ async fn copy_clip(app: tauri::AppHandle, id: String) -> Result<(), String> {
     }).await.map_err(|e| e.to_string())?
 }
 
+/// Scrive testo arbitrario (es. formati "Copia come") senza creare clip:
+/// sotto gate + last_hash aggiornato così il watcher non lo re-ingerisce.
+/// Niente bump_copy, niente emit: la history non cambia.
+#[tauri::command]
+fn copy_text(state: State<AppState>, app: tauri::AppHandle, text: String) -> Result<(), String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    let _gate = state.clipboard_gate.lock().map_err(|e| e.to_string())?;
+    app.clipboard().write_text(text.clone()).map_err(|e| e.to_string())?;
+    let mut last_hash = state.last_hash.lock().map_err(|e| e.to_string())?;
+    *last_hash = watcher::Snapshot::Text(text).hash();
+    Ok(())
+}
+
 #[tauri::command]
 fn combine_clips(state: State<AppState>, app: tauri::AppHandle, ids: Vec<String>) -> Result<Clip, String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -833,6 +846,7 @@ fn main() {
             delete_clip,
             clear_history,
             copy_clip,
+            copy_text,
             combine_clips,
             get_categories,
             create_category,

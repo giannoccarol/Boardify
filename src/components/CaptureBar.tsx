@@ -7,6 +7,7 @@ import { cardTitle } from "../types";
 import { AppBadge } from "./AppBadge";
 import { spring } from "../motion";
 import { useBoardify } from "../store";
+import { isTauri } from "../demo";
 import { clipColor } from "../color";
 import { useT } from "../i18n";
 
@@ -19,7 +20,10 @@ export function CaptureBar() {
 
   useEffect(() => {
     refresh();
-    const un = listen("window-shown", () => refresh());
+    // In preview browser non c'è il backend: niente listener Tauri.
+    const un = isTauri()
+      ? listen("window-shown", () => refresh())
+      : Promise.resolve(() => {});
     return () => {
       un.then((f) => f());
     };

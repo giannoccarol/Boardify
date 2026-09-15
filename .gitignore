@@ -10,3 +10,8 @@ src-tauri/gen/
 *.log
 .DS_Store
 .pi/
+
+# playwright
+test-results/
+playwright-report/
+playwright/.cache

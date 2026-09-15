@@ -6,6 +6,24 @@ import type { Category, Clip } from "./types";
 import { DEMO_CATEGORIES, DEMO_CLIPS, isTauri } from "./demo";
 import { DEFAULT_SETTINGS, parseSearch, type Settings } from "./settings";
 
+// Demo browser senza backend: le mutazioni vivono in overlay così sopravvivono
+// ai refresh, come il DB vero su Tauri (altrimenti i filtri post-toggle testano il vuoto).
+const demoFav = new Map<string, boolean>();
+const demoPin = new Map<string, boolean>();
+const demoDeleted = new Set<string>();
+const demoNotes: Clip[] = [];
+
+function demoClips(): Clip[] {
+  return [
+    ...demoNotes,
+    ...DEMO_CLIPS.filter((c) => !demoDeleted.has(c.id)).map((c) => ({
+      ...c,
+      is_favorite: demoFav.get(c.id) ?? c.is_favorite,
+      is_pinned: demoPin.get(c.id) ?? c.is_pinned,
+    })),
+  ];
+}
+
 type View = "shelf" | "library" | "capture" | "settings";
 
 interface BoardifyState {
@@ -43,6 +61,7 @@ interface BoardifyState {
   refresh: () => Promise<void>;
   search: () => Promise<void>;
   copyClip: (id: string, hide?: boolean) => Promise<boolean>;
+  copyText: (text: string) => Promise<boolean>;
   toggleFav: (id: string) => Promise<void>;
   togglePin: (id: string) => Promise<void>;
   setShortcut: (id: string, shortcut: string | null) => Promise<void>;
@@ -190,7 +209,7 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
 
   refresh: async () => {
     if (!isTauri()) {
-      const clips = applyClientFilters(DEMO_CLIPS, get);
+      const clips = applyClientFilters(demoClips(), get);
       set((s) => ({
         clips,
         categories: DEMO_CATEGORIES,
@@ -276,10 +295,25 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
     }
     return true;
   },
+  copyText: async (text) => {
+    set({ copyError: null });
+    try {
+      if (isTauri()) await invoke("copy_text", { text });
+      else {
+        const { copyPlain } = await import("./linkActions");
+        await copyPlain(text);
+      }
+    } catch (error) {
+      set({ copyError: String(error) });
+      return false;
+    }
+    return true;
+  },
   toggleFav: async (id) => {
     const fav = isTauri()
       ? await invoke<boolean>("toggle_favorite", { id })
       : !get().clips.find((c) => c.id === id)?.is_favorite;
+    if (!isTauri()) demoFav.set(id, fav);
     set((s) => ({
       clips: s.clips.map((c) => (c.id === id ? { ...c, is_favorite: fav } : c)),
     }));
@@ -288,6 +322,7 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
     const pin = isTauri()
       ? await invoke<boolean>("toggle_pin", { id })
       : !get().clips.find((c) => c.id === id)?.is_pinned;
+    if (!isTauri()) demoPin.set(id, pin);
     set((s) => ({
       clips: s.clips.map((c) => (c.id === id ? { ...c, is_pinned: pin } : c)),
     }));
@@ -316,6 +351,7 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
   },
   deleteClip: async (id) => {
     if (isTauri()) await invoke("delete_clip", { id });
+    else demoDeleted.add(id);
     set((s) => ({
       clips: s.clips.filter((c) => c.id !== id),
       selectedId: s.selectedId === id ? s.clips[0]?.id ?? null : s.selectedId,
@@ -360,6 +396,7 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
         created_at: now,
       };
       set((s) => ({ clips: [clip, ...s.clips], noteOpen: false, selectedId: clip.id }));
+      demoNotes.unshift(clip);
       return;
     }
     set({ noteOpen: false });

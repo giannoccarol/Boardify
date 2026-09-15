@@ -47,7 +47,7 @@ export function Shelf() {
         const id = st.selectedId ?? st.clips[0]?.id;
         if (id) st.activateClip(id);
       }
-      if (e.key === "n" && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+      if ((e.key === "n" || e.key === "N") && (e.ctrlKey || e.metaKey) && e.shiftKey) {
         e.preventDefault();
         st.setNoteOpen(true);
         setTimeout(() => noteRef.current?.focus(), 40);

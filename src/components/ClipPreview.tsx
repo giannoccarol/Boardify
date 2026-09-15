@@ -5,8 +5,9 @@ import { useClipImageSrc } from "../clipImage";
 import type { Clip } from "../types";
 import { byteSize, imageDimensions, prettyApp, timeAgo } from "../types";
 import { extractUrl, loadLinkMeta, parseMedia, type LinkMeta } from "../linkMeta";
-import { copyPlain, toHtml, toMarkdown, toQrSvg } from "../linkActions";
-import { clipColor, contrastRatio, formatColor, harmonies, isDataImage, isSvgMarkup, parseGradientCss, wcagBadge } from "../color";
+import { toQrSvg } from "../linkActions";
+import { clipColor, contrastRatio, harmonies, isDataImage, isSvgMarkup, parseGradientCss, wcagBadge } from "../color";
+import { copyOptionsFor } from "../copyFormats";
 import { formatCode, guessLang, tokensByLine, tokenizeCode } from "../code";
 import { parseUnit } from "../units";
 import { extractEmail, extractFilePath, extractPhone, extractPlaceholders, isAbsolutePath, isDirectVideo, isLikelyAddress, isQrPayload, isVideoUrl, toMapsUrl } from "../smartActions";
@@ -86,7 +87,7 @@ export function ClipPreview({ clip }: { clip: Clip }) {
         /* path mancante → copia */
       }
     }
-    await copyPlain(p);
+    await s.copyText(p);
   };
 
   const openFile = async (p: string) => {
@@ -99,7 +100,7 @@ export function ClipPreview({ clip }: { clip: Clip }) {
         /* fallback copia */
       }
     }
-    await copyPlain(p);
+    await s.copyText(p);
   };
 
   const smart = useMemo(() => {
@@ -141,6 +142,26 @@ export function ClipPreview({ clip }: { clip: Clip }) {
   const gradient = parseGradientCss(raw);
   const BadgeIcon = clip.kind === "image" || dataImage || svgImage ? ImageIcon : colorHex || gradient ? Palette : clip.kind === "code" ? Code2 : url ? Link2 : FileText;
   const dimensions = imageDimensions(clip);
+  const copyOptions = useMemo(() => {
+    const text = clip.text ?? clip.preview;
+    return copyOptionsFor(clip, {
+      raw: text,
+      url,
+      linkTitle: meta?.title ?? null,
+      colorHex,
+      lang: lang?.lang ?? null,
+      langLabel: lang?.label ?? null,
+      email: smart.email,
+      phone: smart.phone,
+      phoneTel: smart.phone ? `tel:${smart.phone.replace(/[\s.()/\-]/g, "")}` : null,
+      address: smart.address ? text.trim() : null,
+      path: smart.path,
+      unitValues: unit?.conversions ?? [],
+      dimensions,
+      dataImage: dataImage ?? svgImage,
+      qrSvg,
+    });
+  }, [clip, url, meta?.title, colorHex, lang, smart, unit, dimensions, dataImage, svgImage, qrSvg]);
 
   return (
     <motion.div
@@ -232,6 +253,16 @@ export function ClipPreview({ clip }: { clip: Clip }) {
 
       </div>
       <div className="preview-details">
+        {copyOptions.length > 0 && (
+          <div className="mt-3">
+            <p className="eyebrow">{t("library.copyAs")}</p>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {copyOptions.map((o) => (
+                <MiniBtn key={o.id} label={t(o.labelKey, o.params)} onClick={() => s.copyText(o.value)} />
+              ))}
+            </div>
+          </div>
+        )}
         {url && meta?.title && meta.title !== meta.host && meta.title !== "YouTube" && meta.title !== "Vimeo" && <h2 className="preview-title">{meta.title}</h2>}
         {meta?.author && <p className="preview-author">{meta.author}</p>}
         {url && (
@@ -243,12 +274,6 @@ export function ClipPreview({ clip }: { clip: Clip }) {
             {url}
           </button>
         )}
-        {url && (
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            <MiniBtn label={t("library.copyMd")} onClick={() => copyPlain(toMarkdown(url, meta?.title))} />
-            <MiniBtn label={t("library.copyHtml")} onClick={() => copyPlain(toHtml(url, meta?.title))} />
-          </div>
-        )}
         {showQr && qrTarget && qrSvg && (
           <div className="mt-3 flex items-center gap-3 rounded-2xl bg-white p-3 w-fit">
             <div className="w-28 h-28 [&>svg]:w-full [&>svg]:h-full" dangerouslySetInnerHTML={{ __html: qrSvg }} />
@@ -257,18 +282,11 @@ export function ClipPreview({ clip }: { clip: Clip }) {
         {smart.placeholders.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-1.5">
             {smart.placeholders.map((p) => (
-              <MiniBtn key={p} label={p} onClick={() => copyPlain(p)} />
+              <MiniBtn key={p} label={p} onClick={() => s.copyText(p)} />
             ))}
           </div>
         )}
         {colorHex && <ColorDetails hex={colorHex} />}
-        {unit && (
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            {unit.conversions.map((c) => (
-              <MiniBtn key={c.label} label={`${c.label}: ${c.value}`} onClick={() => copyPlain(c.value)} />
-            ))}
-          </div>
-        )}
         {(smart.email || smart.phone || smart.path || smart.address) && (
           <div className="mt-3 flex flex-wrap gap-1.5">
             {smart.email && (
@@ -303,7 +321,7 @@ export function ClipPreview({ clip }: { clip: Clip }) {
               <MiniBtn label={t("library.openFile")} onClick={() => openFile(smart.path!)} />
             )}
             {smart.path && !isAbsolutePath(smart.path) && (
-              <MiniBtn label={t("library.copyPath", { path: smart.path })} onClick={() => copyPlain(smart.path!)} />
+              <MiniBtn label={t("library.copyPath", { path: smart.path })} onClick={() => s.copyText(smart.path!)} />
             )}
           </div>
         )}
@@ -345,24 +363,20 @@ function CodeView({ text, lang }: { text: string; lang: string | null }) {
 
 function ColorDetails({ hex }: { hex: string }) {
   const { t } = useT();
+  const copyText = useBoardify((s) => s.copyText);
   const harm = useMemo(() => harmonies(hex), [hex]);
   const cWhite = contrastRatio(hex, "#FFFFFF");
   const cBlack = contrastRatio(hex, "#000000");
   const cells = [hex.toUpperCase(), harm?.comp, harm?.ana1, harm?.ana2].filter((x): x is string => !!x);
   return (
     <div className="mt-3 space-y-2.5">
-      <div className="flex flex-wrap gap-1.5">
-        {(["hex", "rgb", "hsl"] as const).map((f) => (
-          <MiniBtn key={f} label={formatColor(hex, f)} onClick={() => copyPlain(formatColor(hex, f))} />
-        ))}
-      </div>
       <div className="flex gap-1.5">
         {cells.map((c) => (
           <button
             key={c}
             type="button"
             title={t("library.copyColorTitle", { c })}
-            onClick={() => copyPlain(c)}
+            onClick={() => copyText(c)}
             className="h-9 flex-1 rounded-xl ring-1 ring-white/15 hover:ring-white/40"
             style={{ background: c }}
           />
