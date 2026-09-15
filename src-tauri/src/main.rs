@@ -1,0 +1,716 @@
+//! Boardify — backend Rust: clipboard watcher, SQLite FTS, comandi Tauri.
+//! Local-first, privacy-first. Nessun network.
+
+mod db;
+mod detect;
+mod icons;
+mod source;
+mod watcher;
+
+use chrono::Utc;
+use db::{Category, ClipRow, Db};
+use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::TrayIconBuilder,
+    Emitter, Manager, PhysicalPosition, PhysicalSize, State, WindowEvent,
+};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+
+pub struct AppState {
+    pub db: Arc<Mutex<Db>>,
+    pub last_hash: Arc<Mutex<String>>,
+    pub suppress_once: Arc<Mutex<bool>>,
+    pub watch: Arc<Mutex<WatchSettings>>,
+    pub seq: Arc<Mutex<usize>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchSettings {
+    pub auto_capture: bool,
+    pub capture_toast: bool,
+    pub ignored_apps: Vec<String>,
+    pub auto_delete_days: i64,
+    pub shortcuts_enabled: bool,
+    pub notch_enabled: bool,
+}
+
+impl Default for WatchSettings {
+    fn default() -> Self {
+        Self {
+            auto_capture: true,
+            capture_toast: true,
+            ignored_apps: vec![],
+            auto_delete_days: 0,
+            shortcuts_enabled: true,
+            notch_enabled: true,
+        }
+    }
+}
+
+// ── Tipi pubblici ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Clip {
+    pub id: String,
+    pub kind: String, // text | link | code | color | image | file
+    pub text: Option<String>,
+    pub preview: String,
+    pub image_path: Option<String>,
+    pub color_hex: Option<String>,
+    pub file_paths: Option<Vec<String>>,
+    pub source_app: String,
+    pub source_icon: Option<String>,
+    pub window_title: String,
+    pub hash: String,
+    pub is_favorite: bool,
+    pub is_sensitive: bool,
+    pub ocr_text: Option<String>,
+    pub copy_count: i64,
+    pub categories: Vec<String>,
+    pub created_at: String,
+    pub is_pinned: bool,
+    pub inline_shortcut: Option<String>,
+}
+
+impl From<ClipRow> for Clip {
+    fn from(r: ClipRow) -> Self {
+        let preview = preview_of(&r.kind, r.text.as_deref(), r.color_hex.as_deref());
+        Self {
+            id: r.id,
+            kind: r.kind,
+            text: r.text,
+            preview,
+            image_path: r.image_path,
+            color_hex: r.color_hex,
+            file_paths: r
+                .file_paths_json
+                .and_then(|s| serde_json::from_str(&s).ok()),
+            source_app: r.source_app.clone(),
+            source_icon: crate::icons::resolve_data_url(&r.source_app),
+            window_title: r.window_title,
+            hash: r.hash,
+            is_favorite: r.is_favorite,
+            is_sensitive: r.is_sensitive,
+            ocr_text: r.ocr_text,
+            copy_count: r.copy_count,
+            categories: r
+                .categories_json
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default(),
+            created_at: r.created_at,
+            is_pinned: r.is_pinned,
+            inline_shortcut: r.inline_shortcut,
+        }
+    }
+}
+
+fn preview_of(kind: &str, text: Option<&str>, color: Option<&str>) -> String {
+    if kind == "color" {
+        return color.unwrap_or("#000000").to_string();
+    }
+    text.unwrap_or("").chars().take(220).collect()
+}
+
+// ── Comandi ────────────────────────────────────────────────────
+
+#[tauri::command]
+fn get_clips(
+    state: State<AppState>,
+    limit: Option<i64>,
+    kind: Option<String>,
+    category: Option<String>,
+    favorites_only: Option<bool>,
+) -> Result<Vec<Clip>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.list(limit.unwrap_or(100), kind.as_deref(), category.as_deref(), favorites_only.unwrap_or(false))
+        .map(|rows| rows.into_iter().map(Clip::from).collect())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn search_clips(state: State<AppState>, query: String, limit: Option<i64>) -> Result<Vec<Clip>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.search(&query, limit.unwrap_or(100))
+        .map(|rows| rows.into_iter().map(Clip::from).collect())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn toggle_favorite(state: State<AppState>, id: String) -> Result<bool, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.toggle_favorite(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_clip(state: State<AppState>, app: tauri::AppHandle, id: String) -> Result<(), String> {
+    {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.delete(&id).map_err(|e| e.to_string())?;
+    }
+    let _ = app.emit("clips-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn clear_history(state: State<AppState>, app: tauri::AppHandle) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.clear().map_err(|e| e.to_string())?;
+    let _ = app.emit("clips-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn copy_clip(state: State<AppState>, app: tauri::AppHandle, id: String) -> Result<(), String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    let clip: Clip = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let row = db.get(&id).map_err(|e| e.to_string())?.ok_or("clip non trovata")?;
+        row.into()
+    };
+    // Evita che il watcher re-importi ciò che incolliamo noi;
+    // last_hash = hash del clip così il giro successivo lo vede come duplicato.
+    *state.suppress_once.lock().map_err(|e| e.to_string())? = true;
+    *state.last_hash.lock().map_err(|e| e.to_string())? = clip.hash.clone();
+    if let Some(img) = &clip.image_path {
+        let raw = img.strip_prefix("asset://localhost/").unwrap_or(img);
+        match image::open(raw).map(|i| i.to_rgba8()) {
+            Ok(rgba) => {
+                let (w, h) = (rgba.width(), rgba.height());
+                let image = tauri::image::Image::new_owned(rgba.into_raw(), w, h);
+                app.clipboard().write_image(&image).map_err(|e| e.to_string())?
+            }
+            Err(_) if clip.text.is_some() => app
+                .clipboard()
+                .write_text(clip.text.clone().unwrap())
+                .map_err(|e| e.to_string())?,
+            Err(e) => return Err(format!("immagine non leggibile: {e}")),
+        }
+    } else if let Some(t) = &clip.text {
+        app.clipboard().write_text(t.clone()).map_err(|e| e.to_string())?;
+    }
+    {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.bump_copy(&id).map_err(|e| e.to_string())?;
+    }
+    // Nascondi shelf e simula incolla? Su Wayland non possiamo iniettare tasti
+    // senza portal; lasciamo l'utente premere Ctrl+V (notifica subtle).
+    if let Some(w) = app.get_webview_window("shelf") {
+        let _ = w.hide();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn combine_clips(state: State<AppState>, app: tauri::AppHandle, ids: Vec<String>) -> Result<Clip, String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let mut parts = Vec::new();
+    for id in &ids {
+        if let Some(row) = db.get(id).map_err(|e| e.to_string())? {
+            if let Some(t) = row.text {
+                parts.push(t);
+            }
+        }
+    }
+    drop(db);
+    let combined = parts.join("\n\n— — —\n\n");
+    *state.suppress_once.lock().map_err(|e| e.to_string())? = true;
+    app.clipboard().write_text(combined.clone()).map_err(|e| e.to_string())?;
+    let mut last_hash = state.last_hash.lock().map_err(|e| e.to_string())?;
+    let clip = watcher::ingest_text(
+        &state.db,
+        &combined,
+        "Boardify · Multi-clip",
+        "Multi-clip Copy",
+        &mut last_hash,
+    )
+    .map_err(|e| e.to_string())?;
+    let _ = app.emit("clips-changed", ());
+    Ok(clip.into())
+}
+
+#[tauri::command]
+fn get_categories(state: State<AppState>) -> Result<Vec<Category>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.categories().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn create_category(state: State<AppState>, app: tauri::AppHandle, name: String, color: Option<String>) -> Result<Category, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let c = db.create_category(&name, color.as_deref()).map_err(|e| e.to_string())?;
+    let _ = app.emit("categories-changed", ());
+    Ok(c)
+}
+
+#[tauri::command]
+fn assign_category(state: State<AppState>, app: tauri::AppHandle, clip_id: String, category_id: String, assign: bool) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.assign_category(&clip_id, &category_id, assign).map_err(|e| e.to_string())?;
+    let _ = app.emit("clips-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn get_stats(state: State<AppState>) -> Result<serde_json::Value, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.stats().map_err(|e| e.to_string())
+}
+
+// ── Finestre: toggle shelf/library ─────────────────────────────
+
+static CAPTURE_GEN: AtomicU64 = AtomicU64::new(0);
+
+fn fill_monitor(w: &tauri::WebviewWindow) {
+    let Ok(Some(monitor)) = w.current_monitor() else {
+        return;
+    };
+    let screen = monitor.size();
+    let mon = monitor.position();
+    let _ = w.set_size(PhysicalSize::new(screen.width, screen.height));
+    let _ = w.set_position(PhysicalPosition::new(mon.x, mon.y));
+}
+
+fn show_labeled(app: &tauri::AppHandle, label: &str) {
+    if let Some(w) = app.get_webview_window(label) {
+        match label {
+            "shelf" => {
+                if let Some(c) = app.get_webview_window("capture") {
+                    let _ = c.hide();
+                }
+                fill_monitor(&w);
+                let _ = w.set_ignore_cursor_events(false);
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+            "capture" => {
+                fill_monitor(&w);
+                let _ = w.set_ignore_cursor_events(true);
+                let _ = w.show();
+            }
+            _ => {
+                let _ = w.center();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }
+        let _ = w.emit("window-shown", ());
+    }
+}
+
+fn hide_labeled(app: &tauri::AppHandle, label: &str) {
+    if let Some(w) = app.get_webview_window(label) {
+        let _ = w.hide();
+    }
+}
+
+fn toggle_window(app: &tauri::AppHandle, label: &str) {
+    if let Some(w) = app.get_webview_window(label) {
+        match w.is_visible() {
+            Ok(true) => {
+                let _ = w.hide();
+            }
+            _ => show_labeled(app, label),
+        }
+    }
+}
+
+pub(crate) fn notify_new_clip(app: &tauri::AppHandle) {
+    let _ = app.emit("clips-changed", ());
+    let toast = app
+        .state::<AppState>()
+        .watch
+        .lock()
+        .map(|w| w.capture_toast)
+        .unwrap_or(true);
+    if toast {
+        show_capture_toast(app);
+    }
+}
+
+fn show_capture_toast(app: &tauri::AppHandle) {
+    if let Some(shelf) = app.get_webview_window("shelf") {
+        if shelf.is_visible().unwrap_or(false) {
+            return;
+        }
+    }
+    if let Some(w) = app.get_webview_window("capture") {
+        fill_monitor(&w);
+        let _ = w.set_ignore_cursor_events(true);
+        let already = w.is_visible().unwrap_or(false);
+        if !already {
+            let _ = w.show();
+            let _ = w.emit("window-shown", ());
+        }
+    }
+    let gen = CAPTURE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(2800));
+        if CAPTURE_GEN.load(Ordering::SeqCst) == gen {
+            hide_labeled(&app, "capture");
+        }
+    });
+}
+
+#[tauri::command]
+fn show_window(app: tauri::AppHandle, label: String) {
+    show_labeled(&app, &label);
+}
+
+#[tauri::command]
+fn hide_window(app: tauri::AppHandle, label: String) {
+    hide_labeled(&app, &label);
+}
+
+#[tauri::command]
+fn toggle_pin(state: State<AppState>, id: String) -> Result<bool, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.toggle_pin(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_inline_shortcut(state: State<AppState>, id: String, shortcut: Option<String>) -> Result<(), String> {
+    let norm = shortcut
+        .as_deref()
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .map(|s| if s.starts_with(';') { s } else { format!(";{s}") });
+    if let Some(ref s) = norm {
+        if !s.chars().skip(1).all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            || s.len() < 3
+            || s.len() > 25
+        {
+            return Err("scorciatoia non valida (usa ;nome, 2-24 caratteri)".into());
+        }
+    }
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.set_inline_shortcut(&id, norm.as_deref()).map_err(|e| e.to_string())
+}
+
+fn ingest_clip(app: &tauri::AppHandle, text: &str, source: &str, title: &str) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let mut hash = state.last_hash.lock().map_err(|e| e.to_string())?;
+    watcher::ingest_text(&state.db, text, source, title, &mut hash)?;
+    drop(hash);
+    notify_new_clip(app);
+    Ok(())
+}
+
+#[tauri::command]
+fn insert_note(app: tauri::AppHandle, text: String) -> Result<(), String> {
+    ingest_clip(&app, &text, "Boardify", "Quick note")
+}
+
+#[tauri::command]
+fn apply_watch_settings(
+    state: State<AppState>,
+    auto_capture: bool,
+    capture_toast: bool,
+    ignored_apps: Vec<String>,
+    auto_delete_days: i64,
+    shortcuts_enabled: bool,
+    notch_enabled: bool,
+) -> Result<(), String> {
+    let mut w = state.watch.lock().map_err(|e| e.to_string())?;
+    w.auto_capture = auto_capture;
+    w.capture_toast = capture_toast;
+    w.ignored_apps = ignored_apps;
+    w.auto_delete_days = auto_delete_days;
+    w.shortcuts_enabled = shortcuts_enabled;
+    w.notch_enabled = notch_enabled;
+    drop(w);
+    if auto_delete_days > 0 {
+        if let Ok(db) = state.db.lock() {
+            let _ = db.prune_unused(auto_delete_days);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn pick_color(app: tauri::AppHandle) -> Result<String, String> {
+    let hex = run_color_picker()?;
+    ingest_clip(&app, &hex, "Boardify", "Color picker")?;
+    Ok(hex)
+}
+
+#[tauri::command]
+fn capture_screen_text(app: tauri::AppHandle) -> Result<String, String> {
+    let text = ocr_region()?;
+    if text.trim().is_empty() {
+        return Err("nessun testo riconosciuto".into());
+    }
+    ingest_clip(&app, text.trim(), "Boardify", "Screen text")?;
+    Ok(text)
+}
+
+#[tauri::command]
+fn capture_now(app: tauri::AppHandle) -> Result<(), String> {
+    use arboard::Clipboard;
+    let mut cb = Clipboard::new().map_err(|e| e.to_string())?;
+    let text = cb.get_text().map_err(|e| e.to_string())?;
+    ingest_clip(&app, &text, "Boardify", "Manual capture")
+}
+
+fn shortcuts_on(app: &tauri::AppHandle) -> bool {
+    app.state::<AppState>()
+        .watch
+        .lock()
+        .map(|w| w.shortcuts_enabled)
+        .unwrap_or(true)
+}
+
+fn run_color_picker() -> Result<String, String> {
+    let tries: &[(&str, &[&str])] = &[
+        ("hyprpicker", &["-n"]),
+        ("kcolorchooser", &["--print"]),
+        ("gpick", &["--pick", "--single", "--output"]),
+    ];
+    for (bin, args) in tries {
+        if let Ok(out) = std::process::Command::new(bin).args(*args).output() {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout).trim().to_uppercase();
+                if s.starts_with('#') {
+                    return Ok(s);
+                }
+            }
+        }
+    }
+    Err("installa hyprpicker o kcolorchooser".into())
+}
+
+fn ocr_region() -> Result<String, String> {
+    let path = db::images_dir().join("screen-ocr.png");
+    let grim = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "geom=$(slurp) && grim -g \"$geom\" '{}'",
+            path.display()
+        ))
+        .status();
+    if grim.map(|s| s.success()).unwrap_or(false) {
+        return tesseract(&path);
+    }
+    let spec = std::process::Command::new("spectacle")
+        .args(["-b", "-n", "-r", "-o", path.to_str().unwrap_or("/tmp/boardify-ocr.png")])
+        .status();
+    if spec.map(|s| s.success()).unwrap_or(false) {
+        return tesseract(&path);
+    }
+    Err("serve slurp+grim oppure spectacle, e tesseract".into())
+}
+
+fn tesseract(path: &std::path::Path) -> Result<String, String> {
+    let out = std::process::Command::new("tesseract")
+        .args([path.as_os_str(), std::ffi::OsStr::new("stdout"), std::ffi::OsStr::new("-l"), std::ffi::OsStr::new("eng+ita")])
+        .output()
+        .map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Incolla l'n-esimo clip recente (0-9) senza aprire UI.
+fn paste_recent(app: &tauri::AppHandle, index: usize) {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    let state: State<AppState> = app.state();
+    let rows = state
+        .db
+        .lock()
+        .ok()
+        .and_then(|db| db.list(10, None, None, false).ok())
+        .unwrap_or_default();
+    if let Some(row) = rows.get(index) {
+        *state.suppress_once.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        *state.last_hash.lock().unwrap_or_else(|e| e.into_inner()) = row.hash.clone();
+        if let Some(p) = &row.image_path {
+            let raw = p.strip_prefix("asset://localhost/").unwrap_or(p);
+            if let Ok(rgba) = image::open(raw).map(|i| i.to_rgba8()) {
+                let (w, h) = (rgba.width(), rgba.height());
+                let image = tauri::image::Image::new_owned(rgba.into_raw(), w, h);
+                let _ = app.clipboard().write_image(&image);
+            } else if let Some(t) = &row.text {
+                let _ = app.clipboard().write_text(t.clone());
+            }
+        } else if let Some(t) = &row.text {
+            let _ = app.clipboard().write_text(t.clone());
+        }
+        if let Ok(db) = state.db.lock() {
+            let _ = db.bump_copy(&row.id);
+        }
+        let _ = app.emit("clips-changed", ());
+    }
+}
+
+fn main() {
+    let db = Db::open().expect("impossibile aprire SQLite");
+    let state = AppState {
+        db: Arc::new(Mutex::new(db)),
+        last_hash: Arc::new(Mutex::new(String::new())),
+        suppress_once: Arc::new(Mutex::new(false)),
+        watch: Arc::new(Mutex::new(WatchSettings::default())),
+        seq: Arc::new(Mutex::new(0)),
+    };
+
+    // Shortcut globali desiderati (registrazione best-effort su Wayland/X11)
+    let quick = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyV);
+    let library = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyL);
+
+    tauri::Builder::default()
+        .manage(state)
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            toggle_window(app, "shelf");
+        }))
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
+        .setup(move |app| {
+            // Tray
+            let toggle = MenuItem::with_id(app, "toggle", "Apri Shelf  (Ctrl+Shift+V)", true, None::<&str>)?;
+            let lib = MenuItem::with_id(app, "library", "Libreria  (Ctrl+Shift+L)", true, None::<&str>)?;
+            let settings = MenuItem::with_id(app, "settings", "Impostazioni", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Esci", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&toggle, &lib, &settings, &quit])?;
+            let _ = TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "toggle" => toggle_window(app, "shelf"),
+                    "library" => toggle_window(app, "library"),
+                    "settings" => toggle_window(app, "settings"),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, ev| {
+                    use tauri::tray::TrayIconEvent;
+                    if matches!(ev, TrayIconEvent::Click { button: tauri::tray::MouseButton::Left, .. }) {
+                        toggle_window(tray.app_handle(), "shelf");
+                    }
+                })
+                .build(app)?;
+
+            // Global shortcuts
+            let handle = app.global_shortcut();
+            let _ = handle.on_shortcut(quick, |app, _s, ev| {
+                if ev.state == ShortcutState::Pressed && shortcuts_on(app) {
+                    let ok = app
+                        .state::<AppState>()
+                        .watch
+                        .lock()
+                        .map(|w| w.notch_enabled)
+                        .unwrap_or(true);
+                    if ok {
+                        toggle_window(app, "shelf");
+                    }
+                }
+            });
+            let _ = handle.on_shortcut(library, |app, _s, ev| {
+                if ev.state == ShortcutState::Pressed && shortcuts_on(app) {
+                    toggle_window(app, "library");
+                }
+            });
+            let note_sc = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyN);
+            let cap_sc = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyS);
+            let color_sc = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyP);
+            let ocr_sc = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyT);
+            let seq_sc = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::ArrowDown);
+            let _ = handle.on_shortcut(note_sc, |app, _s, ev| {
+                if ev.state == ShortcutState::Pressed && shortcuts_on(app) {
+                    show_labeled(app, "shelf");
+                    let _ = app.emit("open-note", ());
+                }
+            });
+            let _ = handle.on_shortcut(cap_sc, |app, _s, ev| {
+                if ev.state == ShortcutState::Pressed && shortcuts_on(app) {
+                    let _ = capture_now(app.clone());
+                }
+            });
+            let _ = handle.on_shortcut(color_sc, |app, _s, ev| {
+                if ev.state == ShortcutState::Pressed && shortcuts_on(app) {
+                    let _ = pick_color(app.clone());
+                }
+            });
+            let _ = handle.on_shortcut(ocr_sc, |app, _s, ev| {
+                if ev.state == ShortcutState::Pressed && shortcuts_on(app) {
+                    let _ = capture_screen_text(app.clone());
+                }
+            });
+            let _ = handle.on_shortcut(seq_sc, |app, _s, ev| {
+                if ev.state == ShortcutState::Pressed && shortcuts_on(app) {
+                    let state = app.state::<AppState>();
+                    let idx = {
+                        let mut seq = state.seq.lock().unwrap_or_else(|e| e.into_inner());
+                        let i = *seq;
+                        *seq = i.wrapping_add(1);
+                        i
+                    };
+                    paste_recent(app, idx % 10);
+                }
+            });
+            // Ctrl+Shift+0..9
+            for (i, code) in [
+                Code::Digit0, Code::Digit1, Code::Digit2, Code::Digit3, Code::Digit4,
+                Code::Digit5, Code::Digit6, Code::Digit7, Code::Digit8, Code::Digit9,
+            ]
+            .iter()
+            .enumerate()
+            {
+                let sc = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), *code);
+                let idx = i;
+                let _ = handle.on_shortcut(sc, move |app, _s, ev| {
+                    if ev.state == ShortcutState::Pressed && shortcuts_on(app) {
+                        paste_recent(app, idx);
+                    }
+                });
+            }
+
+            // Watcher clipboard in background
+            let app_handle = app.handle().clone();
+            std::thread::spawn(move || watcher::run_loop(app_handle));
+
+            if let Some(w) = app.get_webview_window("shelf") {
+                fill_monitor(&w);
+            }
+
+            Ok(())
+        })
+        .on_window_event(|win, ev| {
+            if let WindowEvent::CloseRequested { api, .. } = ev {
+                api.prevent_close();
+                let _ = win.hide();
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            get_clips,
+            search_clips,
+            toggle_favorite,
+            delete_clip,
+            clear_history,
+            copy_clip,
+            combine_clips,
+            get_categories,
+            create_category,
+            assign_category,
+            get_stats,
+            show_window,
+            hide_window,
+            toggle_pin,
+            set_inline_shortcut,
+            insert_note,
+            apply_watch_settings,
+            pick_color,
+            capture_screen_text,
+            capture_now,
+        ])
+        .run(tauri::generate_context!())
+        .expect("errore avvio Boardify");
+
+    let _ = Utc::now();
+}

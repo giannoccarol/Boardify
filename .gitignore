@@ -1,0 +1,11 @@
+# deps
+node_modules/
+dist/
+src-tauri/target/
+
+# tauri
+src-tauri/gen/
+
+# logs / local
+*.log
+.DS_Store

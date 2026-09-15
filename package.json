@@ -1,0 +1,40 @@
+{
+  "name": "boardify",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Boardify — clipboard manager visuale, locale e fluidissimo per Linux",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-autostart": "^2.4.2",
+    "@tauri-apps/plugin-clipboard-manager": "^2.2.3",
+    "@tauri-apps/plugin-global-shortcut": "^2.2.2",
+    "@tauri-apps/plugin-notification": "^2.2.3",
+    "@tauri-apps/plugin-opener": "^2.4.2",
+    "@tauri-apps/plugin-store": "^2.3.0",
+    "framer-motion": "^12.23.0",
+    "lucide-react": "^0.525.0",
+    "qrcode-generator": "^2.0.4",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zustand": "^5.0.6"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.11",
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/qrcode-generator": "^0.0.16",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "autoprefixer": "^10.4.21",
+    "tailwindcss": "^4.1.11",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5"
+  }
+}
