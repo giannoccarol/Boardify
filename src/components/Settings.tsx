@@ -273,7 +273,7 @@ function AiPanel({ settings, set, aiSearch, setAiSearch, aiModels, setAiModels, 
         <input aria-label={t("settings.aiBaseUrl")} className="settings-input" value={settings.aiBaseUrl} onChange={(e) => set("aiBaseUrl", e.target.value)} placeholder={def?.baseUrl || "https://…"} spellCheck={false} />
       </Row>
       <Row label={t("settings.aiTest")}>
-        <button className="secondary-button" onClick={test} disabled={aiTestBusy}><Sparkles size={13} />{aiTestBusy ? t("settings.confirming") : t("settings.aiTest")}</button>
+        <button className="secondary-button" aria-label={t("settings.aiTest")} onClick={test} disabled={aiTestBusy}><Sparkles size={13} />{aiTestBusy ? t("settings.confirming") : t("settings.aiTest")}</button>
       </Row>
       {aiTestMsg && <p role="status" className="settings-feedback">{aiTestMsg}</p>}
     </Section>

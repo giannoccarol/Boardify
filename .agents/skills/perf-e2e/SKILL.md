@@ -61,8 +61,16 @@ Lezioni misurate (300 clip, library, headless):
 |---|---|---|
 | Memoize parser puri | 0% (925→936ms) | revert |
 | `layout` framer off | 0% | no (erano le animazioni da tenere) |
+| `popLayout` → `sync` | ~6%, cambia gli exit | revert |
+| inner `.clip-card` motion → `div` | ~0% in animato | tenuto (meno overhead, stesso DOM) |
 | Azioni hover montate sempre → solo su hover/focus (`AnimatePresence` + exit) | longtask total −50% (925→460ms) | tenuto, stessi fade |
 | `content-visibility: auto` su `.clip-card`/`.clip-row` | −20% sul resto (571→460ms) | tenuto, stessi pixel |
+| Selettori zustand stretti + comparatore `memo` in `ClipCard` | frecce su 300 card 175→55ms (3×) | tenuto, stessi pixel |
+
+Numeri veri = build prod (`npm run e2e:prod`): niente StrictMode
+doppio-render → widen 278ms totali (baseline dev 925ms, **−70%**).
+I budget in CI restano larghi (dev headless); la prod si controlla a mano
+prima delle release.
 
 Regola: un'ipotesi per cambio, numero prima/dopo, se non migliora si reverta
 (come sopra). Le animazioni non si toccano: si taglia il lavoro invisibile

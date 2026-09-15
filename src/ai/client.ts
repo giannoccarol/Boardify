@@ -30,6 +30,8 @@ export class AiError extends Error {
 const MAX_INPUT_CHARS = 12_000;
 /** Stesso limite Pi Desktop (`composer.js`): resize canvas, GIF mai toccate. */
 const MAX_IMAGE_EDGE = 1600;
+/** OpenCode Go usa questo ID stabile anche per le richieste ausiliarie (/models). */
+const openCodeSession = crypto.randomUUID();
 
 function trunc(s: string): string {
   const t = (s || "").trim();
@@ -156,6 +158,20 @@ function openAiText(data: unknown): string {
   throw new AiError("bad-response", "Risposta vuota dal modello.");
 }
 
+function responsesText(data: unknown): string {
+  const d = data as { output_text?: string; output?: { type?: string; content?: { type?: string; text?: string }[] }[] };
+  const text = typeof d.output_text === "string"
+    ? d.output_text
+    : (d.output ?? [])
+        .filter((item) => item.type === "message")
+        .flatMap((item) => item.content ?? [])
+        .filter((part) => part.type === "output_text")
+        .map((part) => part.text ?? "")
+        .join("");
+  if (text.trim()) return text.trim();
+  throw new AiError("bad-response", "Risposta vuota dal modello.");
+}
+
 async function runOpenAi(p: AiRunParams, base: string): Promise<string> {
   const headers: Record<string, string> = {};
   if (p.apiKey) headers.Authorization = `Bearer ${p.apiKey}`;
@@ -182,7 +198,7 @@ async function runOpenAi(p: AiRunParams, base: string): Promise<string> {
   try {
     return openAiText(await postJson(url, headers, body));
   } catch (e) {
-    // Alcuni gateway (es. OpenCode Go) rispondono 500/400 ai parametri extra:
+    // Alcuni gateway rispondono 500/400 ai parametri extra:
     // riprova in forma minima prima di arrendersi.
     if (e instanceof AiError && body.reasoning_effort !== undefined && /^http-/.test(e.code)) {
       const minimal: Record<string, unknown> = { model: p.model, messages: body.messages };
@@ -190,6 +206,48 @@ async function runOpenAi(p: AiRunParams, base: string): Promise<string> {
     }
     throw e;
   }
+}
+
+/** OpenCode Go documenta endpoint diversi per famiglia di modello. */
+function goEndpoint(model: string): "chat/completions" | "responses" | "messages" {
+  if (/^(minimax-|qwen3\.)/.test(model)) return "messages";
+  if (/^(gpt-|muse-spark-|grok-4\.[6-9])/.test(model)) return "responses";
+  return "chat/completions";
+}
+
+async function runOpenCodeGo(p: AiRunParams, base: string): Promise<string> {
+  // Il prefisso opencode-go/ vale solo nella config del CLI, non nel campo model dell'API.
+  const model = p.model.trim().replace(/^opencode-go\//, "");
+  const endpoint = goEndpoint(model);
+  const headers = { Authorization: `Bearer ${p.apiKey}`, "x-opencode-session": openCodeSession };
+  if (endpoint === "responses") {
+    const content = p.imageDataUrl
+      ? [{ type: "input_text", text: trunc(p.user) }, { type: "input_image", image_url: p.imageDataUrl }]
+      : [{ type: "input_text", text: trunc(p.user) }];
+    const body = { model, instructions: p.system, input: [{ role: "user", content }] };
+    return responsesText(await postJson(`${base}/responses`, headers, body));
+  }
+  if (endpoint === "messages") {
+    const content: unknown[] = [{ type: "text", text: trunc(p.user) }];
+    if (p.imageDataUrl) {
+      const { mime, data } = splitDataUrl(p.imageDataUrl);
+      content.push({ type: "image", source: { type: "base64", media_type: mime, data } });
+    }
+    const body = { model, max_tokens: 4096, system: p.system, messages: [{ role: "user", content }] };
+    const data = await postJson(`${base}/messages`, {
+      "x-opencode-session": openCodeSession,
+      "x-api-key": p.apiKey,
+      "anthropic-version": "2023-06-01",
+    }, body) as { content?: { type?: string; text?: string }[] };
+    const text = (data.content ?? []).filter((part) => part.type === "text").map((part) => part.text ?? "").join("").trim();
+    if (text) return text;
+    throw new AiError("bad-response", "Risposta vuota dal modello.");
+  }
+  const userContent: unknown = p.imageDataUrl
+    ? [{ type: "text", text: trunc(p.user) }, { type: "image_url", image_url: { url: p.imageDataUrl } }]
+    : trunc(p.user);
+  const body = { model, messages: [{ role: "system", content: p.system }, { role: "user", content: userContent }] };
+  return openAiText(await postJson(`${base}/chat/completions`, headers, body));
 }
 
 function anthropicThinking(effort: AiEffort): { budget: number; max: number } | null {
@@ -280,6 +338,7 @@ export async function runAiAction(p: AiRunParams): Promise<string> {
   switch (def.apiStyle) {
     case "anthropic": return runAnthropic(params, base);
     case "gemini": return runGemini(params, base);
+    case "opencode-go": return runOpenCodeGo(params, base);
     default: return runOpenAi(params, base);
   }
 }
@@ -302,6 +361,7 @@ export async function listProviderModels(providerId: string, apiKey: string, cus
   }
   const headers: Record<string, string> = {};
   if (apiKey.trim()) headers.Authorization = `Bearer ${apiKey.trim()}`;
+  if (def.apiStyle === "opencode-go") headers["x-opencode-session"] = openCodeSession;
   const j = (await getJson(`${base}/models`, headers)) as { data?: { id?: string }[] };
   return (j.data ?? []).map((m) => m.id ?? "").filter(Boolean).sort();
 }

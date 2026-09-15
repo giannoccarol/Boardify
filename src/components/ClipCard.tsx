@@ -26,10 +26,21 @@ interface Props {
 }
 
 export const ClipCard = memo(function ClipCard({ clip, selected, index, variant = "shelf" }: Props) {
-  const { copyClip, toggleFav, togglePin, deleteClip, select, toggleMulti, multiSelect, activateClip, setPreview, settings } = useBoardify();
+  // Selettori stretti: la card si ri-renderizza solo se cambia davvero qualcosa
+  // che mostra (niente re-render a ogni keystroke nella search).
+  const copyClip = useBoardify((s) => s.copyClip);
+  const toggleFav = useBoardify((s) => s.toggleFav);
+  const togglePin = useBoardify((s) => s.togglePin);
+  const deleteClip = useBoardify((s) => s.deleteClip);
+  const select = useBoardify((s) => s.select);
+  const toggleMulti = useBoardify((s) => s.toggleMulti);
+  const activateClip = useBoardify((s) => s.activateClip);
+  const setPreview = useBoardify((s) => s.setPreview);
+  const clipSize = useBoardify((s) => s.settings.clipSize);
+  const clickAction = useBoardify((s) => s.settings.clickAction);
+  const isMulti = useBoardify((s) => s.multiSelect.includes(clip.id));
   const { t, locale } = useT();
   const reduce = useReducedMotion();
-  const isMulti = multiSelect.includes(clip.id);
   const [copied, setCopied] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -53,7 +64,7 @@ export const ClipCard = memo(function ClipCard({ clip, selected, index, variant 
     select(clip.id);
     if (variant === "shelf") {
       setPreview(useBoardify.getState().previewId === clip.id ? null : clip.id);
-    } else if (variant !== "list" && settings.clickAction !== "select") {
+    } else if (variant !== "list" && clickAction !== "select") {
       activate();
     }
   };
@@ -88,7 +99,7 @@ export const ClipCard = memo(function ClipCard({ clip, selected, index, variant 
       </motion.div>
     );
   }
-  const size = clipSizeClass(settings.clipSize, variant === "grid" ? "grid" : "shelf");
+  const size = clipSizeClass(clipSize, variant === "grid" ? "grid" : "shelf");
 
   return (
     <motion.div
@@ -99,8 +110,8 @@ export const ClipCard = memo(function ClipCard({ clip, selected, index, variant 
       transition={{ ...spring, delay: cardDelay(index) }}
       className="clip-tile group shrink-0"
     >
-      <motion.div
-        initial={false}
+      {/* div nativo: nessuna prop di animazione rimasta, framer renderebbe lo stesso DOM */}
+      <div
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         onFocusCapture={() => setFocused(true)}
@@ -165,10 +176,34 @@ export const ClipCard = memo(function ClipCard({ clip, selected, index, variant 
           )}
         </AnimatePresence>
         {copied && <span className="sr-only" role="status">{t("card.copied")}</span>}
-      </motion.div>
+      </div>
     </motion.div>
   );
-});
+}, clipCardEqual);
+
+// Il refresh ricrea gli oggetti clip: senza comparatore ogni keystroke
+// ri-renderizzerebbe tutte le card. Stessi pixel -> skip (clipSize,
+// clickAction, locale e multi arrivano da hook propri e restano corretti).
+function clipCardEqual(p: Props, n: Props): boolean {
+  const a = p.clip;
+  const b = n.clip;
+  return (
+    p.selected === n.selected &&
+    p.index === n.index &&
+    p.variant === n.variant &&
+    a.id === b.id &&
+    a.text === b.text &&
+    a.preview === b.preview &&
+    a.kind === b.kind &&
+    a.color_hex === b.color_hex &&
+    a.image_path === b.image_path &&
+    a.source_app === b.source_app &&
+    a.source_icon === b.source_icon &&
+    a.is_favorite === b.is_favorite &&
+    a.is_pinned === b.is_pinned &&
+    a.created_at === b.created_at
+  );
+}
 
 function HoverBtn({ children, onClick, title, active }: {
   children: ReactNode;

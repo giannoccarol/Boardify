@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "e2e": "playwright test",
+    "e2e:prod": "npm run build && E2E_SERVER='npx vite preview --host 127.0.0.1 --port 1422 --strictPort' playwright test",
     "start": "tauri dev",
     "app": "./scripts/launch.sh",
     "shots": "node scripts/shots.mjs"

@@ -21,7 +21,10 @@ export default defineConfig({
     { name: "reduced", use: { reducedMotion: "reduce" } },
   ],
   webServer: {
-    command: `npx vite --host 127.0.0.1 --port ${PORT} --strictPort`,
+    // E2E_SERVER per i numeri veri: build prod + preview (niente StrictMode doppio-render).
+    command:
+      process.env.E2E_SERVER ??
+      `npx vite --host 127.0.0.1 --port ${PORT} --strictPort`,
     url: `http://127.0.0.1:${PORT}/`,
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,

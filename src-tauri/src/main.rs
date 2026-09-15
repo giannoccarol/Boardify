@@ -312,6 +312,7 @@ async fn ai_proxy(
         return Err("URL non valido: solo https o localhost".into());
     }
     let client = reqwest::Client::builder()
+        .user_agent("Boardify/0.1.0")
         .timeout(Duration::from_millis(timeout_ms.clamp(1_000, 120_000)))
         .build()
         .map_err(|e| e.to_string())?;
