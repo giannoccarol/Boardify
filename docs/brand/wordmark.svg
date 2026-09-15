@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 72" role="img" aria-label="Boardify">
+  <rect width="340" height="72" rx="22" fill="#0c0c0e"/>
+  <text x="22" y="47" font-family="ui-sans-serif, system-ui, -apple-system, sans-serif" font-size="32" font-weight="700" letter-spacing="-1.6" fill="#f4f4f5">b</text>
+  <rect x="42" y="24" width="24" height="24" rx="7" fill="#00B0FF"/>
+  <text x="74" y="47" font-family="ui-sans-serif, system-ui, -apple-system, sans-serif" font-size="32" font-weight="700" letter-spacing="-1.6" fill="#f4f4f5">ardify</text>
+</svg>

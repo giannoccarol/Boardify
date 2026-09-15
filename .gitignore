@@ -9,3 +9,4 @@ src-tauri/gen/
 # logs / local
 *.log
 .DS_Store
+.pi/

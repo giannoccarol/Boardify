@@ -14,6 +14,7 @@ export interface Settings {
   autoDeleteDays: number;
   ignoredApps: string;
   shortcutsEnabled: boolean;
+  shelfShortcut: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -28,6 +29,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoDeleteDays: 0,
   ignoredApps: "",
   shortcutsEnabled: true,
+  shelfShortcut: "Ctrl+Super+V",
 };
 
 export const KINDS = [

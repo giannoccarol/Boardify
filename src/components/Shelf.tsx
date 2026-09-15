@@ -90,10 +90,10 @@ export function Shelf() {
         animate="shown"
         transition={spring}
         className="glass gpu pointer-events-auto w-[1040px] max-w-[96vw] rounded-[28px] overflow-hidden select-none relative"
-        data-tauri-drag-region
         {...stop}
       >
-        <div className="flex items-center gap-2 px-4 pt-3.5 pb-2">
+        <div className="flex items-center gap-2 px-4 pt-3.5 pb-2" data-tauri-drag-region>
+
           <IconBtn
             title="Collection"
             active={s.settings.showCollections}
@@ -108,6 +108,7 @@ export function Shelf() {
               value={s.query}
               onChange={(e) => s.setQuery(e.target.value)}
               placeholder="Search…"
+              data-tauri-drag-region="false"
               className="bg-transparent outline-none flex-1 text-[13.5px] placeholder:text-zinc-500"
             />
             {s.query && (
@@ -162,11 +163,11 @@ export function Shelf() {
           </div>
         )}
 
-        <div className="px-4 pb-4">
+        <div className="px-4 pb-4" data-tauri-drag-region="false">
           {s.clips.length === 0 ? (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="py-9 text-center">
               <p className="text-[15px] font-semibold tracking-tight">Copia qualcosa e apparirà qui</p>
-              <p className="text-[12.5px] text-zinc-500 mt-1">Click su un link = preview · Invio = copia</p>
+              <p className="text-[12.5px] text-zinc-500 mt-1">Click = azioni · Invio / doppio click = copia</p>
             </motion.div>
           ) : (
             <div className="flex flex-col gap-2">
@@ -276,6 +277,7 @@ function IconBtn({
       title={title}
       whileTap={{ scale: 0.9 }}
       onClick={onClick}
+      data-tauri-drag-region="false"
       className={`w-8 h-8 rounded-full grid place-items-center transition-colors
         ${active ? "bg-white text-black" : "text-zinc-400 hover:text-white hover:bg-white/[0.08]"}`}
     >

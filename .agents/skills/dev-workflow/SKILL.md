@@ -11,6 +11,7 @@ Come sviluppare e verificare Boardify senza rompersi.
 | `npx tsc --noEmit` | Typecheck. Sempre prima di commit. |
 | `cargo test … detect` | `cargo test --manifest-path src-tauri/Cargo.toml detect` — euristiche. Primo build ~1 min, poi cache. |
 | `npm run tauri build` | Bundle (AppImage/deb/rpm) in `src-tauri/target/release/bundle/`. Solo a release. |
+| `npm run shots` | PNG del README in `docs/shots/` (Chromium + ImageMagick, Vite su :1421). |
 
 ## Cose da sapere
 

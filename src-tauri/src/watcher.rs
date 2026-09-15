@@ -14,6 +14,10 @@ fn hash_text(s: &str) -> String {
     format!("{:x}", h.finalize())[..16].to_string()
 }
 
+fn lock(m: &Arc<Mutex<String>>) -> std::sync::MutexGuard<'_, String> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn active_app() -> (String, String) {
     crate::source::active_app()
 }
@@ -109,6 +113,7 @@ pub fn run_loop(app: tauri::AppHandle) {
     let state: tauri::State<crate::AppState> = app.state();
     let db = state.db.clone();
     let last_hash = state.last_hash.clone();
+    let last_seen = state.last_seen.clone();
     let suppress = state.suppress_once.clone();
     let watch = state.watch.clone();
     drop(state);
@@ -137,83 +142,88 @@ pub fn run_loop(app: tauri::AppHandle) {
 
         if *suppress.lock().unwrap_or_else(|e| e.into_inner()) {
             *suppress.lock().unwrap_or_else(|e| e.into_inner()) = false;
-            // aggiorna last_hash a ciò che abbiamo scritto (immagine o testo);
-            // copy_clip l'ha già impostato: qui solo fallback se ancora disallineato.
-            if let Ok(img) = cb.get_image() {
+            // Riallinea gli hash a ciò che abbiamo scritto (copy_clip li ha già impostati).
+            let img_hash = cb.get_image().ok().map(|img| {
                 let mut h = Sha256::new();
                 h.update(&img.bytes);
-                *last_hash.lock().unwrap_or_else(|e| e.into_inner()) =
-                    format!("{:x}", h.finalize())[..16].to_string();
-            } else if let Ok(t) = cb.get_text() {
-                *last_hash.lock().unwrap_or_else(|e| e.into_inner()) = hash_text(t.trim());
+                format!("{:x}", h.finalize())[..16].to_string()
+            });
+            let text_hash = cb.get_text().ok().map(|t| hash_text(t.trim()));
+            let has_img = img_hash.is_some();
+            if let Some(ih) = img_hash {
+                *last_hash.lock().unwrap_or_else(|e| e.into_inner()) = ih;
+            }
+            if let Some(th) = text_hash {
+                *last_seen.lock().unwrap_or_else(|e| e.into_inner()) = th.clone();
+                if !has_img {
+                    *last_hash.lock().unwrap_or_else(|e| e.into_inner()) = th;
+                }
+            } else if has_img {
+                // Clipboard solo-immagine: dimentica il testo compagno precedente.
+                *last_seen.lock().unwrap_or_else(|e| e.into_inner()) = String::new();
             }
             continue;
         }
 
-        // 1) prova immagine (solo se cambiata: arboard non dà eventi, quindi
-        //    controlliamo prima il testo; se il testo è uguale proviamo immagine)
-        let text_ok = cb.get_text().ok().map(|s| s.trim().to_string());
-        let mut changed = false;
+        let ignored = || {
+            let (app_name, _) = active_app();
+            settings
+                .ignored_apps
+                .iter()
+                .any(|a| app_name.to_lowercase().contains(&a.to_lowercase()))
+        };
 
-        if let Some(t) = text_ok {
-            if !t.is_empty() {
-                let h = hash_text(t.trim());
-                {
-                    let lh = last_hash.lock().unwrap_or_else(|e| e.into_inner());
-                    if h == *lh && !first {
-                        continue;
+        let text = cb.get_text().ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let text_hash = text.as_ref().map(|t| hash_text(t));
+        let text_new = match &text_hash {
+            Some(h) => first || h != &*lock(&last_hash) && h != &*lock(&last_seen),
+            None => false,
+        };
+
+        // L'immagine va cercata quando cambia qualcosa (una copia immagine porta
+        // quasi sempre anche un testo/URL compagno) oppure ogni ~3 giri per le
+        // copie di sola immagine (es. screenshot), dove il testo resta uguale.
+        static mut TICK: u8 = 0;
+        let tick = unsafe {
+            TICK = TICK.wrapping_add(1);
+            TICK
+        };
+        let mut changed = false;
+        if text_new || tick % 3 == 0 || first {
+            if let Ok(img) = cb.get_image() {
+                let mut h = Sha256::new();
+                h.update(&img.bytes);
+                let ih = format!("{:x}", h.finalize())[..16].to_string();
+                if first || ih != *lock(&last_hash) {
+                    let (app_name, title) = active_app();
+                    // Registra comunque: evita di riprovare lo stesso contenuto.
+                    *lock(&last_hash) = ih.clone();
+                    if let Some(th) = &text_hash {
+                        *lock(&last_seen) = th.clone();
                     }
-                }
-                let (app_name, title) = active_app();
-                if settings
-                    .ignored_apps
-                    .iter()
-                    .any(|a| app_name.to_lowercase().contains(&a.to_lowercase()))
-                {
+                    if !ignored() {
+                        if ingest_image(&db, &img.bytes, img.width, img.height, &app_name, &title, &mut lock(&last_hash)).is_ok() {
+                            changed = true;
+                        }
+                    }
                     first = false;
-                    continue;
                 }
-                let mut lh2 = last_hash.lock().unwrap_or_else(|e| e.into_inner());
-                match ingest_text(&db, &t, &app_name, &title, &mut lh2) {
-                    Ok(_) => {
-                        changed = true;
-                    }
-                    Err(e) if e == "duplicato" => {}
-                    Err(_) => {}
-                }
-                first = false;
             }
         }
 
         if !changed {
-            // 2) fallback immagine: costoso, prova ogni ~3 giri
-            static mut TICK: u8 = 0;
-            let tick = unsafe {
-                TICK = TICK.wrapping_add(1);
-                TICK
-            };
-            if tick % 3 == 0 {
-                if let Ok(img) = cb.get_image() {
+            if let (Some(t), Some(h)) = (text, text_hash) {
+                if first || h != *lock(&last_hash) && h != *lock(&last_seen) {
                     let (app_name, title) = active_app();
-                    if settings
-                        .ignored_apps
-                        .iter()
-                        .any(|a| app_name.to_lowercase().contains(&a.to_lowercase()))
-                    {
-                        first = false;
-                        continue;
+                    *lock(&last_seen) = h.clone();
+                    if !ignored() {
+                        match ingest_text(&db, &t, &app_name, &title, &mut lock(&last_hash)) {
+                            Ok(_) => changed = true,
+                            Err(_) => {}
+                        }
                     }
-                    let mut lh = last_hash.lock().unwrap_or_else(|e| e.into_inner());
-                    if ingest_image(&db, &img.bytes, img.width, img.height, &app_name, &title, &mut lh).is_ok() {
-                        crate::notify_new_clip(&app);
-                    } else {
-                        continue;
-                    }
-                } else {
-                    continue;
+                    first = false;
                 }
-            } else {
-                continue;
             }
         }
 

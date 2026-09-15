@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { X } from "lucide-react";
@@ -45,7 +45,7 @@ export function Settings() {
               onChange={(v) => set("clipSize", v as ClipSize)}
             />
           </Row>
-          <Row label="Click su una card">
+          <Row label="Doppio click / Invio">
             <select
               value={settings.clickAction}
               onChange={(e) => set("clickAction", e.target.value as ClickAction)}
@@ -106,10 +106,13 @@ export function Settings() {
         <Section title="Scorciatoie">
           <Toggle
             label="Scorciatoie globali"
-            hint="Ctrl+Shift+V shelf · L libreria · 0–9 ultimi clip · N nota · S cattura · P colore · T testo schermo"
+            hint={`Shelf ${settings.shelfShortcut} · Ctrl+Shift+L libreria · 0–9 ultimi clip · N nota · S cattura · P colore · T testo schermo`}
             checked={settings.shortcutsEnabled}
             onChange={(v) => set("shortcutsEnabled", v)}
           />
+          <Row label="Apri shelf">
+            <ShortcutRecorder value={settings.shelfShortcut} onChange={(v) => set("shelfShortcut", v)} />
+          </Row>
         </Section>
 
         <Section title="Privacy">
@@ -184,6 +187,59 @@ function Toggle({
           style={{ left: checked ? 18 : 2 }}
         />
       </button>
+    </div>
+  );
+}
+
+function ShortcutRecorder({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [listening, setListening] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <button
+        onClick={() => {
+          setListening(true);
+          setError(null);
+        }}
+        onKeyDown={(e) => {
+          if (!listening) return;
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.key === "Escape") {
+            setListening(false);
+            return;
+          }
+          // Solo modificatori premuti: aspetta il tasto vero.
+          if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return;
+          const mods = [
+            e.ctrlKey && "Ctrl",
+            e.altKey && "Alt",
+            e.shiftKey && "Shift",
+            e.metaKey && "Super",
+          ].filter(Boolean) as string[];
+          const k =
+            e.key.length === 1
+              ? e.key.toUpperCase()
+              : /^F\d{1,2}$/i.test(e.key)
+                ? e.key.toUpperCase()
+                : e.key === " "
+                  ? "Space"
+                  : null;
+          if (mods.length === 0 || !k) {
+            setError("Servono modificatori + tasto (A–Z, 0–9, F1–F12, Spazio)");
+            return;
+          }
+          setListening(false);
+          onChange([...mods, k].join("+"));
+        }}
+        onBlur={() => setListening(false)}
+        className={`px-3 py-1.5 rounded-lg text-[12.5px] font-mono ring-1 outline-none ${
+          listening ? "bg-white text-black ring-white animate-pulse" : "bg-white/[0.07] text-zinc-100 ring-white/10 hover:ring-white/25"
+        }`}
+      >
+        {listening ? "Premi i tasti…" : value}
+      </button>
+      {error && <p className="text-[11px] text-red-400">{error}</p>}
     </div>
   );
 }

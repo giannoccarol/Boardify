@@ -23,6 +23,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 pub struct AppState {
     pub db: Arc<Mutex<Db>>,
     pub last_hash: Arc<Mutex<String>>,
+    pub last_seen: Arc<Mutex<String>>,
     pub suppress_once: Arc<Mutex<bool>>,
     pub watch: Arc<Mutex<WatchSettings>>,
     pub seq: Arc<Mutex<usize>>,
@@ -36,6 +37,7 @@ pub struct WatchSettings {
     pub auto_delete_days: i64,
     pub shortcuts_enabled: bool,
     pub notch_enabled: bool,
+    pub shelf_shortcut: String,
 }
 
 impl Default for WatchSettings {
@@ -47,6 +49,7 @@ impl Default for WatchSettings {
             auto_delete_days: 0,
             shortcuts_enabled: true,
             notch_enabled: true,
+            shelf_shortcut: "Ctrl+Super+V".into(),
         }
     }
 }
@@ -288,8 +291,7 @@ fn show_labeled(app: &tauri::AppHandle, label: &str) {
                 let _ = w.set_focus();
             }
             "capture" => {
-                fill_monitor(&w);
-                let _ = w.set_ignore_cursor_events(true);
+                place_capture(&w);
                 let _ = w.show();
             }
             _ => {
@@ -332,6 +334,20 @@ pub(crate) fn notify_new_clip(app: &tauri::AppHandle) {
     }
 }
 
+/// Finestrella toast top-center a misura di pill (480x80 da tauri.conf):
+/// niente fullscreen e niente click-through — set_ignore_cursor_events(true)
+/// su finestra non ancora realizzata fa panic dentro tao su Wayland.
+fn place_capture(w: &tauri::WebviewWindow) {
+    let Ok(Some(monitor)) = w.current_monitor() else {
+        return;
+    };
+    let scale = monitor.scale_factor();
+    let size = monitor.size().to_logical::<f64>(scale);
+    let pos = monitor.position().to_logical::<f64>(scale);
+    let x = pos.x + (size.width - 480.0) / 2.0;
+    let _ = w.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y: pos.y + 10.0 }));
+}
+
 fn show_capture_toast(app: &tauri::AppHandle) {
     if let Some(shelf) = app.get_webview_window("shelf") {
         if shelf.is_visible().unwrap_or(false) {
@@ -339,8 +355,7 @@ fn show_capture_toast(app: &tauri::AppHandle) {
         }
     }
     if let Some(w) = app.get_webview_window("capture") {
-        fill_monitor(&w);
-        let _ = w.set_ignore_cursor_events(true);
+        place_capture(&w);
         let already = w.is_visible().unwrap_or(false);
         if !already {
             let _ = w.show();
@@ -406,24 +421,60 @@ fn insert_note(app: tauri::AppHandle, text: String) -> Result<(), String> {
     ingest_clip(&app, &text, "Boardify", "Quick note")
 }
 
+/// Registra la shortcut di apertura shelf (best-effort su Wayland/X11).
+fn register_shelf_shortcut(app: &tauri::AppHandle, shortcut: &str) -> Result<(), String> {
+    use std::str::FromStr;
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let sc = Shortcut::from_str(shortcut).map_err(|e| format!("shortcut non valida: {e}"))?;
+    let _ = app.global_shortcut().on_shortcut(sc, |app, _s, ev| {
+        if ev.state == ShortcutState::Pressed && shortcuts_on(app) {
+            let ok = app
+                .state::<AppState>()
+                .watch
+                .lock()
+                .map(|w| w.notch_enabled)
+                .unwrap_or(true);
+            if ok {
+                toggle_window(app, "shelf");
+            }
+        }
+    });
+    Ok(())
+}
+
 #[tauri::command]
 fn apply_watch_settings(
     state: State<AppState>,
+    app: tauri::AppHandle,
     auto_capture: bool,
     capture_toast: bool,
     ignored_apps: Vec<String>,
     auto_delete_days: i64,
     shortcuts_enabled: bool,
     notch_enabled: bool,
+    shelf_shortcut: String,
 ) -> Result<(), String> {
-    let mut w = state.watch.lock().map_err(|e| e.to_string())?;
-    w.auto_capture = auto_capture;
-    w.capture_toast = capture_toast;
-    w.ignored_apps = ignored_apps;
-    w.auto_delete_days = auto_delete_days;
-    w.shortcuts_enabled = shortcuts_enabled;
-    w.notch_enabled = notch_enabled;
-    drop(w);
+    use std::str::FromStr;
+    // Valida prima di toccare lo stato: stringa malformata = errore al frontend.
+    let new_sc = Shortcut::from_str(shelf_shortcut.trim()).map_err(|e| format!("shortcut non valida: {e}"))?;
+    let old = {
+        let mut w = state.watch.lock().map_err(|e| e.to_string())?;
+        w.auto_capture = auto_capture;
+        w.capture_toast = capture_toast;
+        w.ignored_apps = ignored_apps;
+        w.auto_delete_days = auto_delete_days;
+        w.shortcuts_enabled = shortcuts_enabled;
+        w.notch_enabled = notch_enabled;
+        std::mem::replace(&mut w.shelf_shortcut, new_sc.to_string())
+    };
+    if old != new_sc.to_string() {
+        use tauri_plugin_global_shortcut::GlobalShortcutExt;
+        let handle = app.global_shortcut();
+        if let Ok(old_sc) = Shortcut::from_str(&old) {
+            let _ = handle.unregister(old_sc);
+        }
+        register_shelf_shortcut(&app, &new_sc.to_string())?;
+    }
     if auto_delete_days > 0 {
         if let Ok(db) = state.db.lock() {
             let _ = db.prune_unused(auto_delete_days);
@@ -550,13 +601,15 @@ fn main() {
     let state = AppState {
         db: Arc::new(Mutex::new(db)),
         last_hash: Arc::new(Mutex::new(String::new())),
+        last_seen: Arc::new(Mutex::new(String::new())),
         suppress_once: Arc::new(Mutex::new(false)),
         watch: Arc::new(Mutex::new(WatchSettings::default())),
         seq: Arc::new(Mutex::new(0)),
     };
 
-    // Shortcut globali desiderati (registrazione best-effort su Wayland/X11)
-    let quick = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyV);
+    // Shortcut globali desiderati (registrazione best-effort su Wayland/X11).
+    // La shelf usa la stringa configurabile (default Ctrl+Super+V: Ctrl+Shift+V
+    // su Linux è "incolla" nel terminale).
     let library = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyL);
 
     tauri::Builder::default()
@@ -572,7 +625,7 @@ fn main() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .setup(move |app| {
             // Tray
-            let toggle = MenuItem::with_id(app, "toggle", "Apri Shelf  (Ctrl+Shift+V)", true, None::<&str>)?;
+            let toggle = MenuItem::with_id(app, "toggle", "Apri Shelf  (Ctrl+Super+V)", true, None::<&str>)?;
             let lib = MenuItem::with_id(app, "library", "Libreria  (Ctrl+Shift+L)", true, None::<&str>)?;
             let settings = MenuItem::with_id(app, "settings", "Impostazioni", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Esci", true, None::<&str>)?;
@@ -597,20 +650,8 @@ fn main() {
                 .build(app)?;
 
             // Global shortcuts
+            let _ = register_shelf_shortcut(app.handle(), &WatchSettings::default().shelf_shortcut);
             let handle = app.global_shortcut();
-            let _ = handle.on_shortcut(quick, |app, _s, ev| {
-                if ev.state == ShortcutState::Pressed && shortcuts_on(app) {
-                    let ok = app
-                        .state::<AppState>()
-                        .watch
-                        .lock()
-                        .map(|w| w.notch_enabled)
-                        .unwrap_or(true);
-                    if ok {
-                        toggle_window(app, "shelf");
-                    }
-                }
-            });
             let _ = handle.on_shortcut(library, |app, _s, ev| {
                 if ev.state == ShortcutState::Pressed && shortcuts_on(app) {
                     toggle_window(app, "library");

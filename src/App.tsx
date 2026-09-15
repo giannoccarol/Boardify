@@ -36,8 +36,21 @@ export default function BoardifyApp() {
   useEffect(() => {
     initRealtime();
     loadSettings();
-    const v = new URLSearchParams(location.search).get("view");
+    const params = new URLSearchParams(location.search);
+    const v = params.get("view");
     if (v === "library" || v === "shelf" || v === "capture" || v === "settings") setView(v);
+    const shot = params.get("shot");
+    if (!shot) return;
+    void useBoardify.getState().refresh().then(() => {
+      if (shot !== "preview") return;
+      const clips = useBoardify.getState().clips;
+      const id =
+        clips.find((c) => /youtu|vimeo/i.test(c.text ?? c.preview))?.id ??
+        clips.find((c) => c.kind === "link")?.id ??
+        clips[0]?.id ??
+        null;
+      if (id) useBoardify.getState().setPreview(id);
+    });
   }, [setView, loadSettings]);
 
   const stage =

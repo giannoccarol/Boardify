@@ -1,76 +1,103 @@
-# 📋 Boardify
+<h1 align="center">
+  <img src="docs/brand/wordmark.svg" width="280" alt="Boardify" />
+</h1>
 
-**Clipboard manager visuale, locale e fluidissimo per Linux.** Copi qualcosa → appare nello shelf. Fine.
+<p align="center">
+  <strong>Clipboard manager visuale per Linux.</strong><br />
+  Copi qualcosa, cade dallo shelf in cima. Locale, senza cloud,<br />
+  clone spirituale di <a href="https://www.supaste.com/">Supaste</a> — per chi il Mac se lo sogna e il desktop se lo tiene.
+</p>
 
-Clone open di Supaste, costruito per chi vive di copia-incolla: history visuale, categorie che si accendono da sole, ricerca istantanea, incolla ovunque. Zero cloud, tutto in `~/.local/share/boardify`.
+<p align="center">
+  <img src="docs/shots/shelf.png" alt="Shelf in cima: card visive, categorie smart, search" />
+</p>
 
-## ✨ Funzionalità
+## Copi una cosa. Diventa un’altra.
 
-**Cattura automatica**
-- Watcher clipboard (testo + immagini, poll 700 ms su Wayland/X11) con dedup via hash
-- Riconosce l'app di origine su Hyprland, niri, Sway, KDE e X11 + icone reali dal tema Freedesktop
-- OCR immagini con tesseract, screen-text da regione (`slurp`+`grim` o `spectacle`), color picker esterno (`hyprpicker`/`kcolorchooser`)
-- Rileva contenuti sensibili (password, API key, token, carte, chiavi private) e li oscura nelle card
-- App ignorabili, auto-eliminazione vecchi clip, toast di conferma dopo ogni copia
+Niente icone da libreria, niente elenco fisso di categorie. Quello che copi *diventa* la card giusta: lastra di colore, player, snippet, mappa. Se premi copia dieci volte di fila resta **una** clip.
 
-**Categorie smart** — non predefinite: compaiono solo se hai copiato qualcosa di quel tipo
-- `Snippet · Link · QR Code · Email · Template · Video · Colors · Assets · File` + le tue custom
-- Auto-assegnate all'ingestion (euristiche locali in `detect.rs`, con migrazione e backfill dei vecchi clip)
+<p align="center">
+  <img src="docs/brand/menu.svg" width="920" alt="Hex, video, Rust, indirizzo, dieci copie" />
+</p>
 
-**Shelf notch** (`Ctrl+Shift+V`)
-- Search istantanea, pill smart, quick note (`Ctrl+Shift+N`), preview con `Spazio`, `Invio` = copia
+Le pill (Snippet, Link, QR, Email, Template, Video, Colors, Assets, File, e le tue) si accendono da sole quando hai davvero copiato quel tipo di cosa. Search con `@video @email @firefox`.
 
-**Libreria** (`Ctrl+Shift+L`)
-- Viste card / lista / board per categoria, dettaglio con azioni, copia formattata (Plain/ABC/abc/Abc), multi-selezione + combina, pin, preferiti, drag & drop nelle app
+## Un click, le funzioni. Non la chiusura.
 
-**Preview intelligenti**
-- Link: embed YouTube/Vimeo, titolo via oEmbed, copia Markdown/HTML, **QR code generato in locale**
-- Colori: swatch, formati HEX/RGB/HSL, armonie, contrasto WCAG
-- Email/telefoni/indirizzi/path → azioni dirette (mailto, tel, mappe, rivela file)
-- Template: chip per ogni placeholder (`{{nome}}`, `[N]`, `%s`) da copiare al volo
-- Unità: timestamp→data, px↔rem, °C↔°F, kg↔lb, km↔mi · Video mp4 diretti riproducibili
-- Inline shortcuts `;nome` assegnabili e ricercabili
+Sullo shelf il click apre la preview: YouTube/Vimeo, QR locale, Markdown/HTML, armonie HEX/RGB/HSL, mailto, mappe, path, template con `{{nome}}`. Doppio click o Invio copiano (e, se vuoi, nascondono).
 
-**Ricerca** — FTS5 + fallback, debounce 140 ms, tag `@video @email @template @qrcode @code @snippet @firefox…`
+<p align="center">
+  <img src="docs/shots/preview.png" alt="Preview aperta sotto lo shelf, su un video" />
+</p>
 
-## ⌨️ Scorciatoie globali
+## La libreria è la memoria lunga
 
-| Tasti | Azione |
-|---|---|
+Card, lista o board. Pin, preferiti, combina, drag verso le altre app. Il dettaglio a destra è lo stesso cervello della preview, con più spazio.
+
+<p align="center">
+  <img src="docs/shots/library.png" alt="Libreria a card con pannello dettaglio" />
+</p>
+
+## Copi dieci volte. Un toast.
+
+Niente spam. Una cattura, un toast in cima, chrome nero. Poi `Ctrl+V` come sempre — su Wayland non iniettiamo tasti.
+
+<p align="center">
+  <img src="docs/shots/capture.png" width="720" alt="Toast di cattura in cima" />
+</p>
+
+<p align="center">
+  <img src="docs/brand/local.svg" width="920" alt="Sul disco, niente cloud, Linux" />
+</p>
+
+Riconosce l’app di origine (Hyprland, niri, Sway, KDE, X11) e mette l’icona vera in basso a sinistra. Oscura password, token, carte. OCR e color picker se li hai installati.
+
+## Tasti
+
+<p align="center">
+  <img src="docs/brand/keys.svg" width="920" alt="Ctrl Shift V shelf, L libreria, 0–9 incolla" />
+</p>
+
+| Combinazione | Cosa fa |
+| --- | --- |
 | `Ctrl+Shift+V` | Shelf |
 | `Ctrl+Shift+L` | Libreria |
-| `Ctrl+Shift+0–9` | Incolla uno degli ultimi 10 |
-| `Ctrl+Shift+N / S / P / T` | Nota · cattura manuale · colore · testo da schermo |
+| `Ctrl+Shift+0` … `9` | Incolla uno degli ultimi dieci |
+| `Ctrl+Shift+N` | Quick note |
+| `Ctrl+Shift+S` / `P` / `T` | Cattura manuale · colore · testo da schermo |
 
-## 🛠 Sviluppo
+## Lancialo
 
 ```bash
 npm install
-npm run dev              # solo UI (demo senza Tauri)
-npx tsc --noEmit         # typecheck
-cargo test --manifest-path src-tauri/Cargo.toml detect   # euristiche
-npm run tauri dev        # app completa
-npm run tauri build      # bundle in src-tauri/target/release/bundle/
+npm run tauri dev
 ```
 
-Serve per Tauri/WebKit: `webkit2gtk-4.1 base-devel curl wget file openssl appmenu-gtk-module gtk3 librsvg libvips patchelf tesseract`. Su Wayland dopo il copy premi `Ctrl+V` (l'iniezione tasti non è permessa senza portal).
+Dipendenze di sistema: `webkit2gtk-4.1`, `base-devel`, `openssl`, `appmenu-gtk-module`, `gtk3`, `librsvg`, `libvips`, `patchelf`, `tesseract`. Opzionali: `slurp`+`grim` o `spectacle` per il testo da schermo, `hyprpicker`/`kcolorchooser` per i colori.
 
-## 🗂 Struttura
+Solo UI, dati finti, niente Tauri:
 
-```
-src/
-  App.tsx · store.ts (zustand) · settings.ts · types.ts
-  code.ts · color.ts · units.ts · linkMeta.ts · linkActions.ts · smartActions.ts
-  motion.ts (spring 60fps) · demo.ts (preview senza Tauri)
-  components/ Shelf · Library · ClipPreview · ClipCard · CategoryPills · CaptureBar · Settings · AppBadge
-src-tauri/src/
-  main.rs (comandi, tray, shortcut, finestre) · db.rs (SQLite+FTS5) ·
-  detect.rs (euristiche) · watcher.rs (polling) · source.rs (app attiva) · icons.rs
-.agents/skills/  clip-taxonomy · dev-workflow · ui-motion
+```bash
+npm run dev
 ```
 
-Stack: Tauri v2 + Rust · React + Vite + Tailwind v4 + Framer Motion + Zustand · SQLite WAL + FTS5.
+Typecheck e euristiche:
 
-## 🗺 Roadmap
+```bash
+npx tsc --noEmit
+cargo test --manifest-path src-tauri/Cargo.toml detect
+```
 
-Reminders schedulati · screenshot watcher · inline expansion via portal · sync via Syncthing/Nextcloud (mai cloud proprietari).
+Bundle: `npm run tauri build` → `src-tauri/target/release/bundle/`.
+
+I clip vivono in `~/.local/share/boardify/clips.db`. Stack: Tauri v2 + Rust, React, Vite, Tailwind v4, Framer Motion, Zustand, SQLite WAL + FTS5.
+
+## Screenshot del README
+
+Quando cambi lo shelf, la preview o la libreria, rigenera i PNG (Chromium + ImageMagick):
+
+```bash
+npm run shots
+```
+
+Parte Vite su `127.0.0.1:1421`, congela le animazioni con `?shot=`, ritaglia il toast e scrive `docs/shots/{shelf,preview,library,capture}.png`.

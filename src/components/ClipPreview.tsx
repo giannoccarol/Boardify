@@ -17,6 +17,7 @@ import { spring } from "../motion";
 export function ClipPreview({ clip }: { clip: Clip }) {
   const s = useBoardify();
   const url = extractUrl(clip.text ?? clip.preview);
+  const stillShot = typeof document !== "undefined" && document.documentElement.classList.contains("shot");
   const [meta, setMeta] = useState<LinkMeta | null>(url ? parseMedia(url) : null);
   const [showQr, setShowQr] = useState(false);
   // QR: link oppure payload testuali (WIFI:/otpauth/vCard) che stanno nella categoria QR Code
@@ -171,13 +172,15 @@ export function ClipPreview({ clip }: { clip: Clip }) {
           {meta.thumbnail && (
             <img src={meta.thumbnail} alt="" className="absolute inset-0 w-full h-full object-cover" />
           )}
-          <iframe
-            title={meta.title}
-            src={meta.embed}
-            className="relative w-full h-full"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-            allowFullScreen
-          />
+          {!stillShot && (
+            <iframe
+              title={meta.title}
+              src={meta.embed}
+              className="relative w-full h-full"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              allowFullScreen
+            />
+          )}
         </div>
       ) : url && isDirectVideo(url) ? (
         <video src={url} controls preload="metadata" className="w-full max-h-[360px] bg-black" />

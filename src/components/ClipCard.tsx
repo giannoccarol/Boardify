@@ -2,10 +2,12 @@ import { memo, useEffect, useRef, useState, type DragEvent, type ReactNode } fro
 import { motion } from "framer-motion";
 import { Pin, Copy, Star, Trash2, ShieldAlert, Code2, Link2, Play, Check, QrCode } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Clip } from "../types";
 import { byteSize, cardTitle, imageFileUrl, timeAgo } from "../types";
 import { clipSizeClass } from "../settings";
 import { useBoardify } from "../store";
+import { isTauri } from "../demo";
 import { AppBadge } from "./AppBadge";
 import { extractUrl, parseMedia } from "../linkMeta";
 import { cardDelay, snappy, spring } from "../motion";
@@ -27,7 +29,14 @@ export const ClipCard = memo(function ClipCard({ clip, selected, index, variant 
   const isMulti = multiSelect.includes(clip.id);
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const dragIgnore = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+      if (dragIgnore.current) clearTimeout(dragIgnore.current);
+    },
+    [],
+  );
   const flashCopied = () => {
     setCopied(true);
     if (timer.current) clearTimeout(timer.current);
@@ -76,24 +85,51 @@ export const ClipCard = memo(function ClipCard({ clip, selected, index, variant 
       style={{ willChange: "transform, opacity" }}
     >
       <div
-        draggable
+        draggable={variant !== "shelf"}
+        data-tauri-drag-region="false"
+        onMouseDown={(e) => e.stopPropagation()}
         onDragStart={(e: DragEvent) => {
+          if (variant === "shelf") {
+            e.preventDefault();
+            return;
+          }
           e.dataTransfer.setData("text/plain", clip.text ?? clip.preview);
           const url = imageFileUrl(clip);
           if (url) e.dataTransfer.setData("text/uri-list", url + "\r\n");
+          // Overlay fullscreen: click-through solo dopo un drag vero, non sul click.
+          if (isTauri()) {
+            const w = getCurrentWindow();
+            if (dragIgnore.current) clearTimeout(dragIgnore.current);
+            dragIgnore.current = setTimeout(() => {
+              dragIgnore.current = null;
+              w.setIgnoreCursorEvents(true).catch(() => {});
+            }, 160);
+          }
+        }}
+        onDragEnd={() => {
+          if (dragIgnore.current) {
+            clearTimeout(dragIgnore.current);
+            dragIgnore.current = null;
+          }
+          if (isTauri()) getCurrentWindow().setIgnoreCursorEvents(false).catch(() => {});
         }}
         onClick={(e) => {
           if ((e.target as HTMLElement).closest("button")) return;
+          e.stopPropagation();
           if (e.shiftKey) {
             toggleMulti(clip.id);
             return;
           }
           select(clip.id);
+          if (variant === "shelf") {
+            const open = useBoardify.getState().previewId;
+            setPreview(open === clip.id ? null : clip.id);
+            return;
+          }
           if (settings.clickAction !== "select") {
             flashCopied();
             activateClip(clip.id);
           }
-          if (clip.kind === "link" || clip.kind === "image") setPreview(clip.id);
         }}
         onDoubleClick={() => activateClip(clip.id)}
       >

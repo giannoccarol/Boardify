@@ -204,6 +204,10 @@ export function Library() {
                     onDragStart={(e) => {
                       const url = imageFileUrl(selected);
                       if (url) e.dataTransfer.setData("text/uri-list", url + "\r\n");
+                      if (isTauri()) getCurrentWindow().setIgnoreCursorEvents(true).catch(() => {});
+                    }}
+                    onDragEnd={() => {
+                      if (isTauri()) getCurrentWindow().setIgnoreCursorEvents(false).catch(() => {});
                     }}
                     className="w-full max-h-52 object-cover rounded-2xl ring-1 ring-white/10 bg-[#111] cursor-grab"
                   />

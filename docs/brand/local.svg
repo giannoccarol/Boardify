@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 132" role="img" aria-label="Tutto resta sul disco">
+  <rect width="920" height="132" rx="28" fill="#0c0c0e"/>
+  <g font-family="ui-sans-serif, system-ui, -apple-system, sans-serif">
+    <rect x="28" y="28" width="272" height="76" rx="18" fill="#141418"/>
+    <rect x="48" y="48" width="36" height="36" rx="8" fill="#00B0FF"/>
+    <rect x="56" y="56" width="20" height="12" rx="2" fill="#0c0c0e"/>
+    <rect x="60" y="70" width="12" height="6" rx="1" fill="#0c0c0e"/>
+    <text x="100" y="62" fill="#f4f4f5" font-size="15" font-weight="600">Sul disco</text>
+    <text x="100" y="82" fill="#71717a" font-size="12">~/.local/share/boardify</text>
+
+    <rect x="324" y="28" width="272" height="76" rx="18" fill="#141418"/>
+    <circle cx="362" cy="66" r="16" fill="#1f1f24"/>
+    <path d="M352 56l20 20M372 56l-20 20" stroke="#00B0FF" stroke-width="3" stroke-linecap="round"/>
+    <text x="392" y="62" fill="#f4f4f5" font-size="15" font-weight="600">Niente cloud</text>
+    <text x="392" y="82" fill="#71717a" font-size="12">niente account, niente sync</text>
+
+    <rect x="620" y="28" width="272" height="76" rx="18" fill="#141418"/>
+    <rect x="640" y="50" width="36" height="32" rx="6" fill="#1f1f24"/>
+    <rect x="648" y="46" width="20" height="6" rx="3" fill="#00B0FF"/>
+    <text x="692" y="62" fill="#f4f4f5" font-size="15" font-weight="600">Linux vero</text>
+    <text x="692" y="82" fill="#71717a" font-size="12">Wayland, KDE, Hyprland, niri</text>
+  </g>
+</svg>

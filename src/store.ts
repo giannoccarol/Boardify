@@ -76,6 +76,7 @@ async function persistSettings(s: Settings) {
       autoDeleteDays: s.autoDeleteDays,
       shortcutsEnabled: s.shortcutsEnabled,
       notchEnabled: s.notchEnabled,
+      shelfShortcut: s.shelfShortcut,
     });
   } catch {
     /* store plugin opzionale in preview */

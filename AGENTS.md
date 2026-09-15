@@ -9,6 +9,7 @@ npx tsc --noEmit                                        # sempre
 cargo test --manifest-path src-tauri/Cargo.toml detect  # se tocchi detect.rs
 npm run dev    # solo UI, dati finti da src/demo.ts (preview senza Tauri)
 npm run tauri dev  # app vera
+npm run shots      # PNG del README (docs/shots/, serve Chromium)
 ```
 
 ## Regole dure
