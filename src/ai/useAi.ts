@@ -35,6 +35,7 @@ export function useAiAssistant(clip: Clip, ctx: AiActionCtx) {
   }, [clip, ctx, locale, aiReady, categories]);
 
   const reset = () => {
+    setMenuOpen(false);
     setStatus("idle");
     setAction(null);
     setResult("");

@@ -29,6 +29,10 @@ const shelfEmerge: Transition = {
   type: "tween", duration: 0.3, times: [0, 0.32, 1],
   ease: [[0.16, 1, 0.3, 1], [0.45, 0, 0.2, 1]],
 };
+const shelfRetreat: Transition = {
+  type: "tween", duration: 0.3, times: [0, 0.68, 1],
+  ease: [[0.8, 0, 0.55, 1], [0.7, 0, 0.84, 0]],
+};
 
 export const shelfVariants: Variants = {
   hidden: { opacity: 0, y: -42, scaleX: 0.075, scaleY: 0.07 },
@@ -51,7 +55,17 @@ export const shelfVariants: Variants = {
       opacity: { duration: 0.09, ease: "easeOut" },
     },
   },
-  exit: { opacity: 0, y: -12, scaleX: 0.9, scaleY: 0.8, transition: { duration: 0.16 } },
+  collapse: {
+    opacity: 1, y: 0, scaleX: 1.035, scaleY: 0.3,
+    transition: { duration: 0.22, ease: [0.4, 0, 0.6, 1] },
+  },
+  exit: {
+    opacity: [1, 0.35, 0],
+    y: [0, -3, -42],
+    scaleX: [1.035, 0.17, 0.075],
+    scaleY: [0.3, 0.15, 0.07],
+    transition: shelfRetreat,
+  },
 };
 
 // Una sagoma arrotondata emerge dal bordo e si fonde nella finestra
@@ -66,7 +80,14 @@ export const shelfSeedVariants: Variants = {
     transition: shelfEmerge,
   },
   shown: { opacity: 0, transition: { duration: 0 } },
-  exit: { opacity: 0, transition: { duration: 0 } },
+  collapse: { opacity: 0, y: 0, scaleX: 4, scaleY: 0.75, transition: { duration: 0 } },
+  exit: {
+    opacity: [0, 1, 0],
+    y: [0, -3, -42],
+    scaleX: [4, 1.15, 0.7],
+    scaleY: [0.75, 1, 0.7],
+    transition: shelfRetreat,
+  },
 };
 
 // Il contenuto entra quando la superficie è già aperta: niente testo schiacciato
@@ -79,7 +100,8 @@ export const shelfContentVariants: Variants = {
     y: 0,
     transition: { ...soft, delay: 0.065, opacity: { duration: 0.2, delay: 0.065 } },
   },
-  exit: { opacity: 0, transition: { duration: 0.08 } },
+  collapse: { opacity: 0, y: -12, transition: { duration: 0.12 } },
+  exit: { opacity: 0, y: -12, transition: { duration: 0 } },
 };
 
 export const shelfGleamVariants: Variants = {
@@ -91,7 +113,42 @@ export const shelfGleamVariants: Variants = {
     scaleY: 1,
     transition: { ...soft, opacity: { duration: 0.5, times: [0, 0.3, 1] } },
   },
+  collapse: { opacity: 0.25, transition: { duration: 0.16 } },
+  exit: { opacity: 0, transition: { duration: 0.15 } },
+};
+
+/** Le superfici piccole riprendono la bolla, con corsa e tempi più brevi. */
+export const menuVariants: Variants = {
+  hidden: { opacity: 0, y: -8, scaleX: 0.82, scaleY: 0.55 },
+  shown: {
+    opacity: 1, y: 0, scaleX: 1, scaleY: 1,
+    transition: { ...snappy, damping: 27, delayChildren: 0.035, staggerChildren: 0.018, opacity: { duration: 0.1 } },
+  },
+  exit: { opacity: 0, y: -8, scaleX: 0.86, scaleY: 0.6, transition: { duration: 0.15, ease: [0.4, 0, 1, 1] } },
+};
+
+export const menuItemVariants: Variants = {
+  hidden: { opacity: 0, y: -4 },
+  shown: { opacity: 1, y: 0, transition: { ...snappy, opacity: { duration: 0.1 } } },
   exit: { opacity: 0, transition: { duration: 0.08 } },
+};
+
+export const actionTrayVariants: Variants = {
+  hidden: { opacity: 0, y: -6, scaleX: 0.65, scaleY: 0.75 },
+  shown: { opacity: 1, y: 0, scaleX: 1, scaleY: 1, transition: { ...snappy, damping: 28, opacity: { duration: 0.1 } } },
+  exit: { opacity: 0, y: -5, scaleX: 0.75, scaleY: 0.8, transition: { duration: 0.13 } },
+};
+
+export const previewVariants: Variants = {
+  hidden: { opacity: 0, y: -12, scaleX: 0.94, scaleY: 0.8 },
+  shown: { opacity: 1, y: 0, scaleX: 1, scaleY: 1, transition: { ...soft, damping: 27, opacity: { duration: 0.13 } } },
+  exit: { opacity: 0, y: -10, scaleX: 0.96, scaleY: 0.85, transition: { duration: 0.16 } },
+};
+
+export const actionGlyphVariants: Variants = {
+  hidden: { opacity: 0, scale: 0.55, rotate: -25, y: 3 },
+  shown: { opacity: 1, scale: 1, rotate: 0, y: 0, transition: { ...snappy, damping: 22, opacity: { duration: 0.1 } } },
+  exit: { opacity: 0, scale: 0.65, rotate: 15, y: -3, transition: { duration: 0.1 } },
 };
 
 export const cardVariants: Variants = {

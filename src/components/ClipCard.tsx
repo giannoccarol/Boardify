@@ -9,8 +9,9 @@ import { clipSizeClass } from "../settings";
 import { useBoardify } from "../store";
 import { isTauri } from "../demo";
 import { AppBadge } from "./AppBadge";
+import { ActionGlyph } from "./ActionGlyph";
 import { extractUrl, parseMedia } from "../linkMeta";
-import { cardDelay, snappy, spring } from "../motion";
+import { actionTrayVariants, cardDelay, snappy, spring } from "../motion";
 import { clipColor, isDataImage, isDarkColor, isSvgMarkup, parseGradientCss, formatColor, type ColorFmt } from "../color";
 import { formatCode, guessLang } from "../code";
 import { parseUnit } from "../units";
@@ -42,6 +43,7 @@ export const ClipCard = memo(function ClipCard({ clip, selected, index, variant 
   const { t, locale } = useT();
   const reduce = useReducedMotion();
   const [copied, setCopied] = useState(false);
+  const [copySequence, setCopySequence] = useState(0);
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -54,6 +56,7 @@ export const ClipCard = memo(function ClipCard({ clip, selected, index, variant 
 
   const flashCopied = () => {
     setCopied(true);
+    setCopySequence((n) => n + 1);
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => setCopied(false), 1400);
   };
@@ -160,16 +163,16 @@ export const ClipCard = memo(function ClipCard({ clip, selected, index, variant 
         <AnimatePresence initial={false}>
           {(hovered || focused || copied) && (
             <motion.div
-              className="clip-actions"
+              className="clip-actions gpu"
               role="group"
               aria-label={t("card.actions")}
-              initial={{ opacity: 0, y: reduce ? 0 : -4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, transition: { duration: 0.1 } }}
-              transition={snappy}
+              variants={actionTrayVariants}
+              initial={reduce ? false : "hidden"}
+              animate="shown"
+              exit={reduce ? { opacity: 0, transition: { duration: 0 } } : "exit"}
             >
           <HoverBtn title={t("action.pin")} active={!!clip.is_pinned} onClick={() => togglePin(clip.id)}><Pin size={13} className={clip.is_pinned ? "fill-current" : ""} /></HoverBtn>
-          <HoverBtn title={copied ? t("card.copied") : t("action.copy")} active={copied} onClick={async () => { if (await copyClip(clip.id)) flashCopied(); }}>{copied ? <Check size={13} /> : <Copy size={13} />}</HoverBtn>
+          <HoverBtn title={copied ? t("card.copied") : t("action.copy")} active={copied} sequence={copySequence} onClick={async () => { if (await copyClip(clip.id)) flashCopied(); }}>{copied ? <Check size={13} /> : <Copy size={13} />}</HoverBtn>
           <HoverBtn title={t("action.delete")} onClick={() => deleteClip(clip.id)}><Trash2 size={13} /></HoverBtn>
           <HoverBtn title={t("action.favorite")} active={clip.is_favorite} onClick={() => toggleFav(clip.id)}><Star size={13} className={clip.is_favorite ? "fill-current" : ""} /></HoverBtn>
             </motion.div>
@@ -205,23 +208,25 @@ function clipCardEqual(p: Props, n: Props): boolean {
   );
 }
 
-function HoverBtn({ children, onClick, title, active }: {
+function HoverBtn({ children, onClick, title, active, sequence }: {
   children: ReactNode;
   onClick: () => void;
   title: string;
   active?: boolean;
+  sequence?: number;
 }) {
+  const reduce = useReducedMotion();
   return (
     <motion.button
       title={title}
       aria-label={title}
       aria-pressed={active}
-      whileTap={{ scale: 0.92 }}
+      whileTap={reduce ? undefined : { scale: 0.88 }}
       transition={snappy}
       onClick={(e) => { e.stopPropagation(); onClick(); }}
       className={`clip-action-button ${active ? "is-active" : ""}`}
     >
-      {children}
+      <ActionGlyph active={active} sequence={sequence}>{children}</ActionGlyph>
     </motion.button>
   );
 }

@@ -8,6 +8,7 @@ mod icons;
 #[cfg(target_os = "windows")]
 mod screen;
 mod source;
+mod shelf_transition;
 mod watcher;
 
 use chrono::Utc;
@@ -383,10 +384,14 @@ fn fill_monitor(w: &tauri::WebviewWindow) {
     let _ = w.center();
 }
 
+static SHELF_TRANSITION: Mutex<shelf_transition::ShelfTransition> =
+    Mutex::new(shelf_transition::ShelfTransition::new());
+
 fn show_labeled(app: &tauri::AppHandle, label: &str) {
     if let Some(w) = app.get_webview_window(label) {
         match label {
             "shelf" => {
+                SHELF_TRANSITION.lock().unwrap_or_else(|e| e.into_inner()).show();
                 if let Some(c) = app.get_webview_window("capture") {
                     let _ = c.hide();
                 }
@@ -411,15 +416,43 @@ fn show_labeled(app: &tauri::AppHandle, label: &str) {
 
 fn hide_labeled(app: &tauri::AppHandle, label: &str) {
     if let Some(w) = app.get_webview_window(label) {
+        if label == "shelf" && w.is_visible().unwrap_or(false) {
+            let generation = SHELF_TRANSITION.lock()
+                .unwrap_or_else(|e| e.into_inner()).request_close();
+            let Some(generation) = generation else { return; };
+            let _ = w.emit("shelf-close-requested", generation);
+            // La UI conferma alla fine dell'exit. Fallback per WebView non pronta
+            // o bloccata; il token evita di nascondere una successiva riapertura.
+            let app = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(1200));
+                let handle = app.clone();
+                let _ = app.run_on_main_thread(move || finish_shelf_close(handle, generation));
+            });
+            return;
+        }
         let _ = w.hide();
     }
 }
 
+#[tauri::command]
+fn finish_shelf_close(app: tauri::AppHandle, generation: u32) {
+    let mut transition = SHELF_TRANSITION.lock().unwrap_or_else(|e| e.into_inner());
+    if transition.finish_close(generation) {
+        if let Some(w) = app.get_webview_window("shelf") { let _ = w.hide(); }
+    }
+}
+
 fn toggle_window(app: &tauri::AppHandle, label: &str) {
+    if label == "shelf" && SHELF_TRANSITION.lock()
+        .unwrap_or_else(|e| e.into_inner()).is_closing() {
+        show_labeled(app, label);
+        return;
+    }
     if let Some(w) = app.get_webview_window(label) {
         match w.is_visible() {
             Ok(true) => {
-                let _ = w.hide();
+                hide_labeled(app, label);
             }
             _ => show_labeled(app, label),
         }
@@ -891,7 +924,7 @@ fn main() {
         .on_window_event(|win, ev| {
             if let WindowEvent::CloseRequested { api, .. } = ev {
                 api.prevent_close();
-                let _ = win.hide();
+                hide_labeled(win.app_handle(), win.label());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -911,6 +944,7 @@ fn main() {
             ai_proxy,
             show_window,
             hide_window,
+            finish_shelf_close,
             toggle_pin,
             set_inline_shortcut,
             edit_clip,

@@ -18,7 +18,8 @@ import { useAiAssistant } from "../ai/useAi";
 import { AiMenu } from "../ai/AiMenu";
 import { AiPanel } from "../ai/AiPanel";
 import type { AiActionCtx } from "../ai/prompts";
-import { soft } from "../motion";
+import { menuVariants, menuItemVariants, previewVariants, snappy } from "../motion";
+import { ActionGlyph } from "./ActionGlyph";
 import { AppBadge } from "./AppBadge";
 import { useT, type DictKey } from "../i18n";
 
@@ -26,6 +27,8 @@ export function ClipPreview({ clip }: { clip: Clip }) {
   const s = useBoardify();
   const reduce = useReducedMotion();
   const [copied, setCopied] = useState(false);
+  const [copySequence, setCopySequence] = useState(0);
+  const flashCopied = () => { setCopied(true); setCopySequence((n) => n + 1); };
   const { t, locale } = useT();
   const fileSrc = useClipImageSrc(clip.id, clip.kind === "image" && !!clip.image_path);
   const url = extractUrl(clip.text ?? clip.preview);
@@ -36,6 +39,7 @@ export function ClipPreview({ clip }: { clip: Clip }) {
   const [copyOpen, setCopyOpen] = useState(false);
   const [copiedOpt, setCopiedOpt] = useState<string | null>(null);
   const copyWrapRef = useRef<HTMLDivElement | null>(null);
+  const aiWrapRef = useRef<HTMLDivElement | null>(null);
   // QR: link oppure payload testuali (WIFI:/otpauth/vCard) che stanno nella categoria QR Code
   const qrTarget = useMemo(() => {
     if (url) return url;
@@ -72,12 +76,12 @@ export function ClipPreview({ clip }: { clip: Clip }) {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(false), 1200);
     return () => clearTimeout(timer);
-  }, [copied]);
+  }, [copied, copySequence]);
   useEffect(() => {
     if (!copiedOpt) return;
     const timer = setTimeout(() => setCopiedOpt(null), 1200);
     return () => clearTimeout(timer);
-  }, [copiedOpt]);
+  }, [copiedOpt, copySequence]);
 
   useEffect(() => {
     if (!copyOpen) return;
@@ -85,7 +89,12 @@ export function ClipPreview({ clip }: { clip: Clip }) {
       if (copyWrapRef.current && !copyWrapRef.current.contains(e.target as Node)) setCopyOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setCopyOpen(false);
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setCopyOpen(false);
+        copyWrapRef.current?.querySelector<HTMLButtonElement>(".copy-split-toggle")?.focus();
+      }
     };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
@@ -188,6 +197,21 @@ export function ClipPreview({ clip }: { clip: Clip }) {
   const ai = useAiAssistant(clip, aiCtx);
 
   useEffect(() => { ai.reset(); }, [clip.id]);
+  useEffect(() => {
+    if (!ai.menuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (aiWrapRef.current && !aiWrapRef.current.contains(e.target as Node)) ai.setMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") ai.setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [ai.menuOpen, ai.setMenuOpen]);
   const copyOptions = useMemo(() => {
     const text = clip.text ?? clip.preview;
     return copyOptionsFor(clip, {
@@ -211,10 +235,10 @@ export function ClipPreview({ clip }: { clip: Clip }) {
 
   return (
     <motion.div
-      initial={reduce ? false : { opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, transition: { duration: 0.08 } }}
-      transition={{ ...soft, opacity: { duration: 0.12 } }}
+      variants={previewVariants}
+      initial={reduce ? false : "hidden"}
+      animate="shown"
+      exit={reduce ? { opacity: 0, transition: { duration: 0 } } : "exit"}
       className="glass gpu clip-preview"
       role="region"
       aria-label={t("library.preview")}
@@ -230,20 +254,22 @@ export function ClipPreview({ clip }: { clip: Clip }) {
         <div className="preview-tools">
           <div ref={copyWrapRef} className="copy-menu-wrap">
             <div className={`copy-split ${copied ? "is-active" : ""} ${copyOpen ? "is-open" : ""}`}>
-              <button
+              <motion.button
                 type="button"
                 title={copied ? t("card.copied") : t("action.copy")}
                 aria-label={copied ? t("card.copied") : t("action.copy")}
-                onClick={async () => { if (await s.copyClip(clip.id)) setCopied(true); }}
+                onClick={async () => { if (await s.copyClip(clip.id)) flashCopied(); }}
+                whileTap={reduce ? undefined : { scale: 0.92 }}
+                transition={snappy}
                 className="copy-split-main"
               >
-                {copied ? <Check size={13} /> : <Copy size={13} />}
-                <span className="copy-split-label">{copied ? t("card.copied") : t("action.copy")}</span>
-              </button>
+                <ActionGlyph active={copied} sequence={copySequence}>{copied ? <Check size={13} /> : <Copy size={13} />}</ActionGlyph>
+                <span className="copy-split-label" role={copied ? "status" : undefined}>{copied ? t("card.copied") : t("action.copy")}</span>
+              </motion.button>
               {copyOptions.length > 0 && (
                 <>
                   <span className="copy-split-divider" aria-hidden="true" />
-                  <button
+                  <motion.button
                     type="button"
                     title={t("library.copyAs")}
                     aria-label={t("library.copyAs")}
@@ -251,19 +277,21 @@ export function ClipPreview({ clip }: { clip: Clip }) {
                     aria-expanded={copyOpen}
                     onClick={() => setCopyOpen((v) => !v)}
                     className="copy-split-toggle"
+                    whileTap={reduce ? undefined : { scale: 0.86 }}
+                    transition={snappy}
                   >
-                    <ChevronDown size={13} className={`copy-chevron ${copyOpen ? "is-open" : ""}`} />
-                  </button>
+                    <motion.span animate={{ rotate: copyOpen ? 180 : 0 }} transition={reduce ? { duration: 0 } : snappy}><ChevronDown size={13} /></motion.span>
+                  </motion.button>
                 </>
               )}
             </div>
             <AnimatePresence>
               {copyOpen && copyOptions.length > 0 && (
                 <motion.div
-                  initial={reduce ? false : { opacity: 0, y: -4, scale: 0.98 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: -4, scale: 0.98, transition: { duration: 0.1 } }}
-                  transition={{ duration: 0.12 }}
+                  variants={menuVariants}
+                  initial={reduce ? false : "hidden"}
+                  animate="shown"
+                  exit={reduce ? { opacity: 0, transition: { duration: 0 } } : "exit"}
                   className="copy-menu glass gpu"
                   role="menu"
                   aria-label={t("library.copyAs")}
@@ -280,15 +308,18 @@ export function ClipPreview({ clip }: { clip: Clip }) {
                       const preview = copyOptionPreview(o.id, o.value);
                       const done = copiedOpt === o.id;
                       return (
-                        <button
+                        <motion.button
                           key={o.id}
+                          variants={menuItemVariants}
+                          whileTap={reduce ? undefined : { scale: 0.97 }}
+                          transition={snappy}
                           type="button"
                           role="menuitem"
                           className={`copy-menu-item ${done ? "is-done" : ""}`}
                           onClick={async () => {
-                            await s.copyText(o.value);
+                            if (!await s.copyText(o.value)) return;
                             setCopiedOpt(o.id);
-                            setCopied(true);
+                            flashCopied();
                             setCopyOpen(false);
                           }}
                         >
@@ -298,7 +329,7 @@ export function ClipPreview({ clip }: { clip: Clip }) {
                             {preview && <span className="copy-menu-value">{preview}</span>}
                           </span>
                           {done && <Check size={13} className="copy-menu-check" />}
-                        </button>
+                        </motion.button>
                       );
                     })}
                   </div>
@@ -316,13 +347,15 @@ export function ClipPreview({ clip }: { clip: Clip }) {
               <QrCode className="w-3.5 h-3.5" />
             </Tool>
           )}
-          <div className="ai-menu-wrap">
-            <Tool title={t("ai.menu")} active={ai.menuOpen} onClick={() => ai.setMenuOpen((v) => !v)}>
+          <div ref={aiWrapRef} className="ai-menu-wrap">
+            <Tool title={t("ai.menu")} active={ai.menuOpen} onClick={() => ai.setMenuOpen((v) => !v)} hasPopup expanded={ai.menuOpen}>
               <Sparkles className="w-3.5 h-3.5" />
             </Tool>
-            {ai.menuOpen && (
-              <AiMenu actions={ai.actions} disabledReason={ai.disabledReason} onPick={ai.pick} />
-            )}
+            <AnimatePresence>
+              {ai.menuOpen && (
+                <AiMenu actions={ai.actions} disabledReason={ai.disabledReason} onPick={ai.pick} />
+              )}
+            </AnimatePresence>
           </div>
           <Tool title={t("action.pin")} active={!!clip.is_pinned} onClick={() => s.togglePin(clip.id)}>
             <Pin className={`w-3.5 h-3.5 ${clip.is_pinned ? "fill-current" : ""}`} />
@@ -544,15 +577,18 @@ function copyOptionPreview(id: string, value: string): string | null {
 }
 
 function MiniBtn({ label, onClick, icon }: { label: string; onClick: () => void; icon?: ReactNode }) {
+  const reduce = useReducedMotion();
   return (
-    <button
+    <motion.button
       type="button"
       onClick={onClick}
       className="preview-mini-button"
+      whileTap={reduce ? undefined : { scale: 0.95 }}
+      transition={snappy}
     >
       {icon}
       {label}
-    </button>
+    </motion.button>
   );
 }
 
@@ -561,21 +597,30 @@ function Tool({
   onClick,
   title,
   active,
+  hasPopup,
+  expanded,
 }: {
   children: ReactNode;
   onClick: () => void;
   title: string;
   active?: boolean;
+  hasPopup?: boolean;
+  expanded?: boolean;
 }) {
+  const reduce = useReducedMotion();
   return (
-    <button
+    <motion.button
       title={title}
       aria-label={title}
       aria-pressed={active}
+      aria-haspopup={hasPopup ? "menu" : undefined}
+      aria-expanded={hasPopup ? expanded : undefined}
       onClick={onClick}
       className={`preview-tool ${active ? "is-active" : ""}`}
+      whileTap={reduce ? undefined : { scale: 0.88 }}
+      transition={snappy}
     >
-      {children}
-    </button>
+      <ActionGlyph active={active}>{children}</ActionGlyph>
+    </motion.button>
   );
 }

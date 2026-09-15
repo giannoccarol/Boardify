@@ -34,13 +34,30 @@ test.describe("copy menu", () => {
     expectBudget(ms, BUDGET.menuOpenMs, "copy menu open");
 
     const menu = page.locator(".clip-preview .copy-menu");
-    const width = await menu.evaluate((el) => el.getBoundingClientRect().width);
-    expect(width).toBeGreaterThanOrEqual(240);
+    const box = await menu.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return { w: r.width, radius: getComputedStyle(el).borderRadius };
+    });
+    expect(box.w).toBeGreaterThanOrEqual(240);
+    expect(box.radius).toBe("16px");
 
     const items = menu.locator(".copy-menu-item");
     expect(await items.count()).toBeGreaterThan(0);
     const firstLabel = await items.first().locator(".copy-menu-label").innerText();
     expect(firstLabel.trim().length).toBeGreaterThan(0);
+
+    // Hover: radius riga 10px e testo scuro su fondo chiaro (niente bianco-su-bianco).
+    await items.first().hover();
+    await expect
+      .poll(
+        async () =>
+          items.first().evaluate((el) => {
+            const label = el.querySelector(".copy-menu-label")!;
+            return `${getComputedStyle(el).borderTopLeftRadius} ${getComputedStyle(label).color}`;
+          }),
+        { timeout: 3000 },
+      )
+      .toBe("10px rgb(21, 21, 21)");
 
     await page.keyboard.press("Escape");
     await expect(menu).toHaveCount(0);

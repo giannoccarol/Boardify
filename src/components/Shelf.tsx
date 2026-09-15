@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type MouseEvent } from "react";
 import { motion, AnimatePresence, useAnimationControls, useReducedMotion } from "framer-motion";
 import { Search, Star, LayoutGrid, Pin, Settings2, StickyNote, X, Menu } from "lucide-react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useBoardify } from "../store";
 import { Brand } from "./Brand";
+import { ActionGlyph } from "./ActionGlyph";
 import { ClipCard } from "./ClipCard";
 import { ClipPreview } from "./ClipPreview";
 import { CategoryPills } from "./CategoryPills";
@@ -12,6 +13,7 @@ import { groupClips } from "../types";
 import { KIND_IDS } from "../settings";
 import { useT } from "../i18n";
 import { isTauri } from "../demo";
+import { closeShelf, registerShelfClose } from "../shelfWindow";
 import { shelfVariants, shelfSeedVariants, shelfContentVariants, shelfGleamVariants, spring } from "../motion";
 
 export function Shelf() {
@@ -25,22 +27,55 @@ export function Shelf() {
   const [note, setNote] = useState("");
   const reduce = useReducedMotion();
   const entrance = useAnimationControls();
+  const playback = useRef(0);
+  const closeTask = useRef<Promise<void> | null>(null);
+  const [phase, setPhase] = useState<"opening" | "open" | "closing" | "closed">("opening");
+
+  const close = useRef<(generation?: number) => Promise<void>>(async () => {});
+  close.current = (generation) => {
+    if (closeTask.current) return closeTask.current;
+    const current = ++playback.current;
+    entrance.stop();
+    setPhase("closing");
+    live.current.setPreview(null);
+    live.current.setNoteOpen(false);
+    const task = (async () => {
+      if (reduce) entrance.set("hidden");
+      else {
+        await entrance.start("collapse");
+        if (playback.current !== current) return;
+        await entrance.start("exit");
+      }
+      if (playback.current !== current) return;
+      setPhase("closed");
+      if (isTauri() && generation !== undefined) {
+        await invoke("finish_shelf_close", { generation });
+      }
+    })();
+    closeTask.current = task;
+    return task;
+  };
 
   useLayoutEffect(() => {
     // La finestra Tauri resta montata mentre è nascosta. Ripartiamo ad ogni
     // window-shown senza rimontare card, input e contenitori con lo scroll.
     entrance.stop();
+    const current = ++playback.current;
+    closeTask.current = null;
     if (reduce) {
       entrance.set("shown");
+      setPhase("open");
       return;
     }
-    let cancelled = false;
+    setPhase("opening");
     entrance.set("hidden");
-    void entrance.start("emerge").then(() => {
-      if (!cancelled) void entrance.start("shown");
+    void entrance.start("emerge").then(async () => {
+      if (playback.current !== current) return;
+      await entrance.start("shown");
+      if (playback.current === current) setPhase("open");
     });
     return () => {
-      cancelled = true;
+      ++playback.current;
       entrance.stop();
     };
   }, [entrance, reduce, tick]);
@@ -56,7 +91,7 @@ export function Shelf() {
       }
       if (e.key === "Escape") {
         if (st.previewId) st.setPreview(null);
-        else if (isTauri()) getCurrentWindow().hide();
+        else void closeShelf();
       }
       if (e.key === " " && !e.repeat && !["INPUT", "TEXTAREA", "BUTTON"].includes(document.activeElement?.tagName ?? "")) {
         e.preventDefault();
@@ -80,18 +115,22 @@ export function Shelf() {
       }
     };
     window.addEventListener("keydown", onKey);
+    const unregisterClose = registerShelfClose(() => close.current());
     const un = isTauri()
-      ? listen("window-shown", () => {
+      ? Promise.all([listen("window-shown", () => {
           setTick((n) => n + 1);
           live.current.refresh();
           live.current.setPreview(null);
           setTimeout(() => inputRef.current?.focus(), 40);
-        })
-      : Promise.resolve(() => {});
+        }), listen<number>("shelf-close-requested", ({ payload }) => {
+          void close.current(payload);
+        })])
+      : Promise.resolve([]);
     return () => {
       clearTimeout(t);
       window.removeEventListener("keydown", onKey);
-      un.then((f) => f());
+      unregisterClose();
+      un.then((listeners) => listeners.forEach((f) => f()));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -105,7 +144,7 @@ export function Shelf() {
   };
 
   return (
-    <div className="relative flex flex-col items-center w-full pointer-events-none">
+    <div className="relative flex flex-col items-center w-full pointer-events-none" inert={phase === "closing" || phase === "closed"}>
       {!reduce && (
         <motion.div
           aria-hidden="true"
@@ -120,6 +159,7 @@ export function Shelf() {
         initial={reduce ? false : "hidden"}
         animate={entrance}
         exit="exit"
+        data-state={phase}
         className="shelf-window glass gpu pointer-events-auto w-[1040px] max-w-[96vw] overflow-hidden select-none relative"
         {...stop}
       >
@@ -312,18 +352,19 @@ function IconBtn({
   title: string;
   active?: boolean;
 }) {
+  const reduce = useReducedMotion();
   return (
     <motion.button
       title={title}
       aria-label={title}
       aria-pressed={active}
-      whileTap={{ scale: 0.9 }}
+      whileTap={reduce ? undefined : { scale: 0.9 }}
       onClick={onClick}
       data-tauri-drag-region="false"
       className={`w-8 h-8 rounded-[10px] grid place-items-center
         ${active ? "bg-white text-black" : "text-zinc-400 hover:text-white hover:bg-white/[0.08]"}`}
     >
-      {children}
+      <ActionGlyph active={active}>{children}</ActionGlyph>
     </motion.button>
   );
 }

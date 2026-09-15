@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { closeShelf } from "./shelfWindow";
 import { Shelf } from "./components/Shelf";
 import { Library } from "./components/Library";
 import { CaptureBar } from "./components/CaptureBar";
@@ -17,7 +17,7 @@ function dismissShelfBackdrop() {
     st.setPreview(null);
     return;
   }
-  if (isTauri()) getCurrentWindow().hide().catch(() => {});
+  void closeShelf();
 }
 
 export default function BoardifyApp() {

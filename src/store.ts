@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { Category, Clip } from "./types";
 import { DEMO_CATEGORIES, DEMO_CLIPS, isTauri } from "./demo";
 import { DEFAULT_SETTINGS, parseSearch, type Settings } from "./settings";
+import { closeShelf } from "./shelfWindow";
 
 // Demo browser senza backend: le mutazioni vivono in overlay così sopravvivono
 // ai refresh, come il DB vero su Tauri (altrimenti i filtri post-toggle testano il vuoto).
@@ -290,7 +291,8 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
       // The backend event refreshes counts; incrementing here would race it.
       if (hide) {
         const { getCurrentWindow } = await import("@tauri-apps/api/window");
-        await getCurrentWindow().hide().catch(() => {});
+        if (getCurrentWindow().label === "shelf") await closeShelf();
+        else await getCurrentWindow().hide().catch(() => {});
       }
     } else {
       set((s) => ({ clips: s.clips.map((c) => c.id === id ? { ...c, copy_count: c.copy_count + 1 } : c) }));
@@ -443,6 +445,11 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
     await get().refresh();
   },
   openLibrary: async () => {
+    if (!isTauri()) {
+      await closeShelf();
+      set({ view: "library" });
+      return;
+    }
     try {
       await invoke("show_window", { label: "library" });
       await invoke("hide_window", { label: "shelf" });
