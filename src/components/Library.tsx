@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { Search, Star, Trash2, Copy, X, ShieldAlert, Pin, LayoutGrid, List, Columns3, Settings2, Clock3, ArrowUpRight } from "lucide-react";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useBoardify } from "../store";
 import { ClipCard } from "./ClipCard";
@@ -13,6 +13,7 @@ import { formatCopy } from "../settings";
 import { isTauri } from "../demo";
 import { snappy, soft } from "../motion";
 import { useT } from "../i18n";
+import { useClipImageSrc } from "../clipImage";
 import { clipColor, isDataImage, isSvgMarkup, parseGradientCss } from "../color";
 import { normalizeShortcut } from "../smartActions";
 
@@ -43,6 +44,7 @@ export function Library() {
     () => s.clips.find((c) => c.id === s.selectedId) ?? s.clips[0] ?? null,
     [s.clips, s.selectedId]
   );
+  const inspectorSrc = useClipImageSrc(selected?.id ?? "", selected?.kind === "image" && !!selected?.image_path);
 
   return (
     <motion.div
@@ -208,8 +210,9 @@ export function Library() {
                     className="w-full max-h-52 object-cover rounded-2xl ring-1 ring-white/10 bg-[#111]"
                   />
                 ) : selected.kind === "image" && selected.image_path ? (
+                  inspectorSrc ? (
                   <img
-                    src={convertFileSrc(selected.image_path)}
+                    src={inspectorSrc}
                     alt=""
                     draggable
                     onDragStart={(e) => {
@@ -222,6 +225,9 @@ export function Library() {
                     }}
                     className="w-full max-h-52 object-cover rounded-2xl ring-1 ring-white/10 bg-[#111] cursor-grab"
                   />
+                  ) : (
+                    <div className="w-full h-44 rounded-2xl ring-1 ring-white/10 bg-[#111]" />
+                  )
                 ) : (
                   <div className="max-h-52 overflow-y-auto nice-scroll bg-white/[0.04] rounded-2xl p-3.5 text-[12.5px] leading-relaxed whitespace-pre-wrap break-words ring-1 ring-white/10">
                     {selected.text ?? selected.preview}

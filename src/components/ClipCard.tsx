@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { Pin, Copy, Star, Trash2, ShieldAlert, Code2, Link2, Play, Check } from "lucide-react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { useClipImageSrc } from "../clipImage";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Clip } from "../types";
 import { cardTitle, imageFileUrl, kindLabel, prettyApp, timeAgo } from "../types";
@@ -187,6 +187,7 @@ function HoverBtn({ children, onClick, title, active }: {
 
 function CardFace({ clip }: { clip: Clip }) {
   const { locale } = useT();
+  const imgSrc = useClipImageSrc(clip.id, clip.kind === "image" && !!clip.image_path);
   const url = extractUrl(clip.text ?? clip.preview);
   const media = url ? parseMedia(url) : null;
   const color = clipColor(clip);
@@ -245,13 +246,17 @@ function CardFace({ clip }: { clip: Clip }) {
   if (clip.kind === "image" && clip.image_path) {
     return (
       <>
-        <img
-          src={convertFileSrc(clip.image_path)}
-          alt=""
-          draggable={false}
-          className="absolute inset-0 w-full h-full object-cover"
-          loading="lazy"
-        />
+        {imgSrc ? (
+          <img
+            src={imgSrc}
+            alt=""
+            draggable={false}
+            className="absolute inset-0 w-full h-full object-cover"
+            loading="lazy"
+          />
+        ) : (
+          <div className="absolute inset-0 bg-[#111]" />
+        )}
         <Meta clip={clip} light />
       </>
     );

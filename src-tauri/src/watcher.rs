@@ -214,9 +214,16 @@ fn capture(app: &tauri::AppHandle, cb: &mut Clipboard, automatic: bool) -> Resul
     // Take the source before decoding images/OCR; use this same snapshot for the
     // ignored-app check and the saved metadata.
     let source = crate::source::active_app();
-    let _clipboard_guard = state.clipboard_gate.lock().map_err(|e| e.to_string())?;
-    let Some(snapshot) = read_snapshot(cb)? else {
-        return Ok(());
+    // Il gate protegge SOLO la lettura dagli appunti: tenerlo durante PNG/DB
+    // bloccava il copy_clip (Ctrl+V da Boardify) e faceva sembrare che il
+    // watcher "rubasse" l'incolla. Lo snapshot è owned, dopo la read il gate
+    // viene rilasciato subito.
+    let snapshot = {
+        let _clipboard_guard = state.clipboard_gate.lock().map_err(|e| e.to_string())?;
+        match read_snapshot(cb)? {
+            Some(s) => s,
+            None => return Ok(()),
+        }
     };
     let mut last_hash = state.last_hash.lock().map_err(|e| e.to_string())?;
     if ignored(&source.0, &settings) {
@@ -225,7 +232,6 @@ fn capture(app: &tauri::AppHandle, cb: &mut Clipboard, automatic: bool) -> Resul
     }
     let row = ingest_snapshot(&state.db, &snapshot, &source, &mut last_hash, &images_dir())?;
     drop(last_hash);
-    drop(_clipboard_guard);
     if let Some(row) = row {
         crate::notify_new_clip(app);
         queue_ocr(app, row);

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { Copy, ExternalLink, Link2, X, Pin, Star, QrCode, Mail, Phone, MapPin, FolderOpen, Image as ImageIcon, FileText, Code2, Palette, Clock3, Check } from "lucide-react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { useClipImageSrc } from "../clipImage";
 import type { Clip } from "../types";
 import { byteSize, imageDimensions, prettyApp, timeAgo } from "../types";
 import { extractUrl, loadLinkMeta, parseMedia, type LinkMeta } from "../linkMeta";
@@ -21,6 +21,7 @@ export function ClipPreview({ clip }: { clip: Clip }) {
   const reduce = useReducedMotion();
   const [copied, setCopied] = useState(false);
   const { t, locale } = useT();
+  const fileSrc = useClipImageSrc(clip.id, clip.kind === "image" && !!clip.image_path);
   const url = extractUrl(clip.text ?? clip.preview);
   const stillShot = typeof document !== "undefined" && document.documentElement.classList.contains("shot");
   const [loadedMeta, setLoadedMeta] = useState<{ url: string; value: LinkMeta } | null>(null);
@@ -206,7 +207,11 @@ export function ClipPreview({ clip }: { clip: Clip }) {
       ) : url && isDirectVideo(url) ? (
         <video src={url} controls preload="metadata" className="preview-media preview-video" />
       ) : clip.kind === "image" && clip.image_path ? (
-        <img src={convertFileSrc(clip.image_path)} alt="" className="preview-media preview-image" />
+        fileSrc ? (
+          <img src={fileSrc} alt="" className="preview-media preview-image" />
+        ) : (
+          <div className="preview-media bg-[#111] min-h-[180px]" />
+        )
       ) : dataImage || svgImage ? (
         <img src={dataImage ?? svgImage!} alt="" draggable={false} className="preview-media preview-image" />
       ) : colorHex || gradient ? (

@@ -25,7 +25,9 @@ export const DEFAULT_SETTINGS: Settings = {
   showCollections: true,
   showFilters: false,
   autoCapture: true,
-  captureToast: true,
+  // Popup di cattura disabilitato su richiesta (master switch nel backend):
+  // il toggle resta nelle Settings per riattivarlo in futuro.
+  captureToast: false,
   notchEnabled: true,
   libraryView: "card",
   autoDeleteDays: 0,

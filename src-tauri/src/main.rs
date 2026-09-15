@@ -44,7 +44,10 @@ impl Default for WatchSettings {
     fn default() -> Self {
         Self {
             auto_capture: true,
-            capture_toast: true,
+            // Popup di cattura disabilitato su richiesta: resta il codice per
+            // riattivarlo, ma il default è off e c'è un master switch in
+            // notify_new_clip/show_capture_toast che lo blocca comunque.
+            capture_toast: false,
             ignored_apps: vec![],
             auto_delete_days: 0,
             shortcuts_enabled: true,
@@ -166,22 +169,43 @@ fn clear_history(state: State<AppState>, app: tauri::AppHandle) -> Result<(), St
     Ok(())
 }
 
+/// Data URL dell'immagine di un clip: la webview non carica sempre i file locali
+/// (asset://), il data: funziona ovunque. Solo dentro images_dir().
+#[tauri::command]
+fn image_data(state: State<AppState>, id: String) -> Result<String, String> {
+    let row = state.db.lock().map_err(|e| e.to_string())?
+        .get(&id).map_err(|e| e.to_string())?.ok_or("clip non trovata")?;
+    let path = row.image_path.as_deref().ok_or("nessuna immagine")?;
+    let canon = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
+    let dir = std::fs::canonicalize(db::images_dir()).map_err(|e| e.to_string())?;
+    if !canon.starts_with(&dir) {
+        return Err("percorso non consentito".into());
+    }
+    let bytes = std::fs::read(&canon).map_err(|e| e.to_string())?;
+    use base64::Engine;
+    Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
 fn write_clip(app: &tauri::AppHandle, row: &ClipRow) -> Result<(), String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
     let content = clipboard::content(row)?;
     let state = app.state::<AppState>();
-    let _gate = state.clipboard_gate.lock().map_err(|e| e.to_string())?;
-    let mut last_hash = state.last_hash.lock().map_err(|e| e.to_string())?;
-    match &content {
-        watcher::Snapshot::Image(img) => {
-            let image = tauri::image::Image::new(img.bytes.as_ref(), img.width as u32, img.height as u32);
-            app.clipboard().write_image(&image).map_err(|e| e.to_string())?;
+    // Sezione critica cortissima: solo la scrittura negli appunti + update
+    // dell'hash. Il bump DB avviene dopo aver rilasciato i lock così il
+    // watcher non blocca mai il copia/incolla dell'utente e viceversa.
+    {
+        let _gate = state.clipboard_gate.lock().map_err(|e| e.to_string())?;
+        let mut last_hash = state.last_hash.lock().map_err(|e| e.to_string())?;
+        match &content {
+            watcher::Snapshot::Image(img) => {
+                let image = tauri::image::Image::new(img.bytes.as_ref(), img.width as u32, img.height as u32);
+                app.clipboard().write_image(&image).map_err(|e| e.to_string())?;
+            }
+            watcher::Snapshot::Text(text) => app.clipboard().write_text(text.clone()).map_err(|e| e.to_string())?,
         }
-        watcher::Snapshot::Text(text) => app.clipboard().write_text(text.clone()).map_err(|e| e.to_string())?,
+        // Suppress exactly our successful write, never the user's next clipboard.
+        *last_hash = content.hash();
     }
-    // Suppress exactly our successful write, never the user's next clipboard.
-    *last_hash = content.hash();
-    drop(last_hash);
     state.db.lock().map_err(|e| e.to_string())?.bump_copy(&row.id).map_err(|e| e.to_string())?;
     let _ = app.emit("clips-changed", ());
     Ok(())
@@ -210,8 +234,12 @@ fn combine_clips(state: State<AppState>, app: tauri::AppHandle, ids: Vec<String>
     }
     drop(db);
     let combined = parts.join("\n\n— — —\n\n");
-    let _gate = state.clipboard_gate.lock().map_err(|e| e.to_string())?;
-    app.clipboard().write_text(combined.clone()).map_err(|e| e.to_string())?;
+    // Scrittura negli appunti sotto gate, ingest dopo: non tenere il gate
+    // bloccato durante SQLite così un copia rapido + Ctrl+V non si incastra.
+    {
+        let _gate = state.clipboard_gate.lock().map_err(|e| e.to_string())?;
+        app.clipboard().write_text(combined.clone()).map_err(|e| e.to_string())?;
+    }
     let mut last_hash = state.last_hash.lock().map_err(|e| e.to_string())?;
     let clip = watcher::ingest_text(
         &state.db,
@@ -310,14 +338,22 @@ fn toggle_window(app: &tauri::AppHandle, label: &str) {
     }
 }
 
+/// Master switch del popup di cattura: disabilitato su richiesta utente.
+/// NON rimuovere il codice del toast (place_capture/show_capture_toast e la
+/// finestra "capture"): per riattivarlo basta rimettere `true` qui.
+const CAPTURE_TOAST_ENABLED: bool = false;
+
 pub(crate) fn notify_new_clip(app: &tauri::AppHandle) {
     let _ = app.emit("clips-changed", ());
+    if !CAPTURE_TOAST_ENABLED {
+        return;
+    }
     let toast = app
         .state::<AppState>()
         .watch
         .lock()
         .map(|w| w.capture_toast)
-        .unwrap_or(true);
+        .unwrap_or(false);
     if toast {
         show_capture_toast(app);
     }
@@ -338,6 +374,12 @@ fn place_capture(w: &tauri::WebviewWindow) {
 }
 
 fn show_capture_toast(app: &tauri::AppHandle) {
+    // Doppia guardia: anche le chiamate dirette non devono mai mostrare il
+    // popup mentre il master switch è off. Mostrare la finestra ruba il focus
+    // su Wayland e rompe il flusso copia -> Ctrl+V.
+    if !CAPTURE_TOAST_ENABLED {
+        return;
+    }
     if let Some(shelf) = app.get_webview_window("shelf") {
         if shelf.is_visible().unwrap_or(false) {
             return;
@@ -700,6 +742,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_clips,
             search_clips,
+            image_data,
             toggle_favorite,
             delete_clip,
             clear_history,
