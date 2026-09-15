@@ -178,7 +178,18 @@ async function runOpenAi(p: AiRunParams, base: string): Promise<string> {
     temperature: 0.7,
   };
   if (p.effort !== "off") body.reasoning_effort = p.effort;
-  return openAiText(await postJson(`${base}/chat/completions`, headers, body));
+  const url = `${base}/chat/completions`;
+  try {
+    return openAiText(await postJson(url, headers, body));
+  } catch (e) {
+    // Alcuni gateway (es. OpenCode Go) rispondono 500/400 ai parametri extra:
+    // riprova in forma minima prima di arrendersi.
+    if (e instanceof AiError && body.reasoning_effort !== undefined && /^http-/.test(e.code)) {
+      const minimal: Record<string, unknown> = { model: p.model, messages: body.messages };
+      return openAiText(await postJson(url, headers, minimal));
+    }
+    throw e;
+  }
 }
 
 function anthropicThinking(effort: AiEffort): { budget: number; max: number } | null {
