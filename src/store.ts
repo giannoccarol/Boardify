@@ -69,6 +69,8 @@ interface BoardifyState {
   deleteClip: (id: string) => Promise<void>;
   combineSelected: () => Promise<void>;
   createCategory: (name: string) => Promise<void>;
+  ensureCategoryByName: (name: string) => Promise<Category | null>;
+  assignCategory: (clipId: string, categoryId: string, assign: boolean) => Promise<void>;
   insertNote: (text: string) => Promise<void>;
   openLibrary: () => Promise<void>;
   openSettings: () => Promise<void>;
@@ -374,6 +376,44 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
     await invoke("create_category", { name, color: null });
     const categories = await invoke<Category[]>("get_categories");
     set({ categories });
+  },
+  ensureCategoryByName: async (name) => {
+    const clean = name.trim();
+    if (!clean) return null;
+    const found = get().categories.find((c) => c.name.toLowerCase() === clean.toLowerCase());
+    if (found) return found;
+    if (!isTauri()) {
+      const cat: Category = { id: clean, name: clean, color: "#6366f1", count: 0 };
+      set((s) => ({ categories: [...s.categories, cat] }));
+      return cat;
+    }
+    const created = await invoke<Category>("create_category", { name: clean, color: null });
+    const categories = await invoke<Category[]>("get_categories");
+    set({ categories });
+    return categories.find((c) => c.name.toLowerCase() === clean.toLowerCase()) ?? created;
+  },
+  assignCategory: async (clipId, categoryId, assign) => {
+    if (!isTauri()) {
+      const cname = get().categories.find((c) => c.id === categoryId)?.name;
+      if (cname) {
+        set((s) => {
+          const already = s.clips.find((c) => c.id === clipId)?.categories.includes(cname);
+          return {
+            clips: s.clips.map((c) =>
+              c.id === clipId
+                ? { ...c, categories: assign ? [...new Set([...c.categories, cname])] : c.categories.filter((x) => x !== cname) }
+                : c
+            ),
+            categories: s.categories.map((cat) =>
+              cat.id === categoryId && assign && !already ? { ...cat, count: cat.count + 1 } : cat
+            ),
+          };
+        });
+      }
+      return;
+    }
+    await invoke("assign_category", { clipId, categoryId, assign });
+    await get().refresh();
   },
   insertNote: async (text) => {
     if (isTauri()) {

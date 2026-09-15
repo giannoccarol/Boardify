@@ -30,6 +30,8 @@ image = { version = "0.25", features = ["png", "jpeg"] }
 active-win-pos-rs = "0.7"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
+# Proxy HTTP per le API AI (la webview applica il CORS, Rust no). rustls = pure-Rust, ok Linux+Windows.
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Backend Wayland per arboard + D-Bus per KWin: solo Linux.

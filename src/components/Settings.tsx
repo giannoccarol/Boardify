@@ -1,10 +1,12 @@
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ArrowUpRight, Check, ChevronRight, Clipboard, Columns3, Command, HardDrive, Keyboard, LayoutGrid, List, LockKeyhole, Palette, RotateCcw, Search, Settings2, ShieldCheck, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { ArrowUpRight, Check, ChevronRight, Clipboard, Columns3, Command, HardDrive, Keyboard, LayoutGrid, List, LockKeyhole, Palette, RefreshCw, RotateCcw, Search, Settings2, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
 import { useBoardify } from "../store";
-import { DEFAULT_SETTINGS, type ClickAction, type ClipSize, type Locale, type Settings as Preferences } from "../settings";
+import { DEFAULT_SETTINGS, type AiEffort, type ClickAction, type ClipSize, type Locale, type Settings as Preferences } from "../settings";
+import { AI_PROVIDERS, aiProvider, maskKey, type AiProviderDef } from "../ai/providers";
+import { listProviderModels, pingAi } from "../ai/client";
 import { useT, type DictKey } from "../i18n";
 import { isTauri } from "../demo";
 import { soft, snappy } from "../motion";
@@ -13,6 +15,7 @@ import { Brand } from "./Brand";
 const PANELS = [
   { id: "appearance", icon: Palette },
   { id: "general", icon: SlidersHorizontal },
+  { id: "ai", icon: Sparkles },
   { id: "keyboard", icon: Keyboard },
   { id: "privacy", icon: ShieldCheck },
 ] as const;
@@ -26,6 +29,11 @@ export function Settings() {
   const [confirmAction, setConfirmAction] = useState<"reset" | "clear" | null>(null);
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
+  const [aiSearch, setAiSearch] = useState("");
+  const [aiModels, setAiModels] = useState<string[]>([]);
+  const [aiModelsBusy, setAiModelsBusy] = useState(false);
+  const [aiTestMsg, setAiTestMsg] = useState("");
+  const [aiTestBusy, setAiTestBusy] = useState(false);
   const reduce = useReducedMotion();
   const set = <K extends keyof Preferences>(key: K, value: Preferences[K]) => patchSettings({ [key]: value } as Partial<Preferences>);
   const close = () => {
@@ -93,6 +101,20 @@ export function Settings() {
               <Section title={t("settings.interaction")}><Row label={t("settings.dblClick")} hint={t("settings.dblClickHint")}><select aria-label={t("settings.dblClick")} className="settings-select" value={settings.clickAction} onChange={(e) => set("clickAction", e.target.value as ClickAction)}><option value="copy-hide">{t("settings.copyHide")}</option><option value="copy">{t("settings.copyOnly")}</option><option value="select">{t("settings.selectOnly")}</option></select></Row></Section>
               <div className="settings-note"><Command size={16} /><p>{t("settings.pasteNotePre")} <kbd>Ctrl</kbd> + <kbd>V</kbd> {t("settings.pasteNotePost")}</p></div>
             </>}
+            {panel === "ai" && <AiPanel
+              settings={settings}
+              set={set}
+              aiSearch={aiSearch}
+              setAiSearch={setAiSearch}
+              aiModels={aiModels}
+              setAiModels={setAiModels}
+              aiModelsBusy={aiModelsBusy}
+              setAiModelsBusy={setAiModelsBusy}
+              aiTestMsg={aiTestMsg}
+              setAiTestMsg={setAiTestMsg}
+              aiTestBusy={aiTestBusy}
+              setAiTestBusy={setAiTestBusy}
+            />}
             {panel === "keyboard" && <>
               <div className="keyboard-feature"><span className="eyebrow">{t("settings.nextClip")}</span><Keycaps value={settings.shelfShortcut} /><p>{t("settings.nextClipSub")}</p></div>
               <Section title={t("settings.quickAccess")}><Toggle label={t("settings.globalShortcuts")} hint={t("settings.globalShortcutsHint")} checked={settings.shortcutsEnabled} onChange={(v) => set("shortcutsEnabled", v)} /><Row label={t("settings.openShelf")} hint={t("settings.openShelfHint")}><ShortcutRecorder value={settings.shelfShortcut} onChange={(v) => set("shelfShortcut", v)} /></Row></Section>
@@ -148,4 +170,170 @@ function ShortcutRecorder({ value, onChange }: { value: string; onChange: (v: st
 }
 function Segment({ label, value, options, onChange }: { label: string; value: string; options: [string, string][]; onChange: (value: string) => void }) {
   return <div className="segmented-control" role="group" aria-label={label}>{options.map(([id, text]) => <button key={id} aria-pressed={value === id} className={value === id ? "is-active" : ""} onClick={() => onChange(id)}>{text}</button>)}</div>;
+}
+
+/** Pannello AI: setup (provider/modello/effort) + card con sole key, come Pi Desktop. */
+function AiPanel({ settings, set, aiSearch, setAiSearch, aiModels, setAiModels, aiModelsBusy, setAiModelsBusy, aiTestMsg, setAiTestMsg, aiTestBusy, setAiTestBusy }: {
+  settings: Preferences;
+  set: <K extends keyof Preferences>(key: K, value: Preferences[K]) => void;
+  aiSearch: string; setAiSearch: (v: string) => void;
+  aiModels: string[]; setAiModels: (v: string[]) => void;
+  aiModelsBusy: boolean; setAiModelsBusy: (v: boolean) => void;
+  aiTestMsg: string; setAiTestMsg: (v: string) => void;
+  aiTestBusy: boolean; setAiTestBusy: (v: boolean) => void;
+}) {
+  const { t } = useT();
+  const def = aiProvider(settings.aiProvider);
+  const activeKey = settings.aiKeys[settings.aiProvider] ?? "";
+  const suggestions = Array.from(new Set([...aiModels, ...(def?.suggestedModels ?? [])]));
+
+  const loadModelsFor = async (providerId: string, key: string, base: string) => {
+    const d = aiProvider(providerId);
+    if (!d || d.oauthOnly) return;
+    setAiModelsBusy(true);
+    try {
+      setAiModels(await listProviderModels(providerId, key, base));
+    } catch (e) {
+      setAiModels([]);
+      setAiTestMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAiModelsBusy(false);
+    }
+  };
+
+  // Carica tutta la lista all'apertura del pannello (se usabile senza key o con key già salvata).
+  useEffect(() => {
+    if (def && !def.oauthOnly && (!def.keyRequired || activeKey.trim())) {
+      void loadModelsFor(def.id, activeKey, settings.aiBaseUrl);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const changeProvider = (id: string) => {
+    setAiModels([]);
+    setAiTestMsg("");
+    // Mai preselezionare: l'utente sceglie dalla lista completa appena caricata.
+    useBoardify.getState().patchSettings({ aiProvider: id, aiModel: "" });
+    const st = useBoardify.getState().settings;
+    void loadModelsFor(id, st.aiKeys[id] ?? "", st.aiBaseUrl);
+  };
+
+  const test = async () => {
+    if (!def || aiTestBusy) return;
+    setAiTestBusy(true);
+    setAiTestMsg("");
+    try {
+      await pingAi({
+        providerId: def.id,
+        model: settings.aiModel.trim(),
+        effort: "off",
+        apiKey: activeKey.trim(),
+        customBase: settings.aiBaseUrl,
+      });
+      setAiTestMsg(t("settings.aiTestOk"));
+    } catch (e) {
+      setAiTestMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAiTestBusy(false);
+    }
+  };
+
+  const q = aiSearch.toLowerCase().trim();
+  const providers = AI_PROVIDERS.filter((p) =>
+    !q || `${p.name} ${p.id} ${p.envVar ?? ""} ${p.hint}`.toLowerCase().includes(q)
+  );
+
+  return <>
+    <Section title={t("settings.aiSetup")} description={t("settings.aiSetupDesc")}>
+      <Toggle label={t("settings.aiEnable")} hint={t("settings.aiEnableHint")} checked={settings.aiEnabled} onChange={(v) => set("aiEnabled", v)} />
+      <Row label={t("settings.aiProvider")} hint={t("settings.aiProviderHint")}>
+        <select aria-label={t("settings.aiProvider")} className="settings-select" value={settings.aiProvider} onChange={(e) => changeProvider(e.target.value)}>
+          {AI_PROVIDERS.map((p) => <option key={p.id} value={p.id} disabled={p.oauthOnly}>{p.name}{p.oauthOnly ? " (OAuth)" : ""}</option>)}
+        </select>
+      </Row>
+      <Row label={t("settings.aiModel")} hint={t("settings.aiModelHint")}>
+        <input
+          aria-label={t("settings.aiModel")}
+          className="settings-input"
+          list="ai-model-list"
+          value={settings.aiModel}
+          onChange={(e) => set("aiModel", e.target.value)}
+          placeholder={suggestions[0] ?? "…"}
+          spellCheck={false}
+        />
+        <datalist id="ai-model-list">{suggestions.map((m) => <option key={m} value={m} />)}</datalist>
+        <button className="secondary-button" onClick={() => def && void loadModelsFor(def.id, activeKey, settings.aiBaseUrl)} disabled={aiModelsBusy || !def || def.oauthOnly} title={t("settings.aiReload")} aria-label={t("settings.aiReload")}>
+          <RefreshCw size={13} />
+        </button>
+      </Row>
+      <Row label={t("settings.aiEffort")} hint={t("settings.aiEffortHint")}>
+        <Segment label={t("settings.aiEffort")} value={settings.aiEffort} options={[["off", t("settings.effort.off")], ["minimal", t("settings.effort.minimal")], ["medium", t("settings.effort.medium")], ["high", t("settings.effort.high")]]} onChange={(v) => set("aiEffort", v as AiEffort)} />
+      </Row>
+      <Row label={t("settings.aiBaseUrl")} hint={t("settings.aiBaseUrlHint")}>
+        <input aria-label={t("settings.aiBaseUrl")} className="settings-input" value={settings.aiBaseUrl} onChange={(e) => set("aiBaseUrl", e.target.value)} placeholder={def?.baseUrl || "https://…"} spellCheck={false} />
+      </Row>
+      <Row label={t("settings.aiTest")}>
+        <button className="secondary-button" onClick={test} disabled={aiTestBusy}><Sparkles size={13} />{aiTestBusy ? t("settings.confirming") : t("settings.aiTest")}</button>
+      </Row>
+      {aiTestMsg && <p role="status" className="settings-feedback">{aiTestMsg}</p>}
+    </Section>
+    <Section title={t("settings.aiKeys")} description={t("settings.aiKeysDesc")}>
+      <div className="settings-group">
+        <div className="settings-row"><div className="row-control" style={{ maxWidth: "100%", flex: 1 }}><Search size={13} /><input aria-label={t("settings.aiSearch")} className="settings-input" value={aiSearch} onChange={(e) => setAiSearch(e.target.value)} placeholder={t("settings.aiSearch")} spellCheck={false} /></div></div>
+        {providers.map((p) => (
+          <AiProviderRow
+            key={p.id}
+            def={p}
+            savedKey={settings.aiKeys[p.id]}
+            onSave={(key) => set("aiKeys", { ...settings.aiKeys, [p.id]: key })}
+            onRemove={() => {
+              const next = { ...settings.aiKeys };
+              delete next[p.id];
+              set("aiKeys", next);
+            }}
+          />
+        ))}
+      </div>
+    </Section>
+    <div className="settings-note"><Sparkles size={16} /><p>{t("settings.aiPrivacy")}</p></div>
+  </>;
+}
+
+function AiProviderRow({ def, savedKey, onSave, onRemove }: {
+  def: AiProviderDef;
+  savedKey?: string;
+  onSave: (key: string) => void;
+  onRemove: () => void;
+}) {
+  const { t } = useT();
+  const [open, setOpen] = useState(false);
+  const [input, setInput] = useState("");
+  const configured = !!savedKey?.trim();
+  return (
+    <div>
+      <div className="settings-row">
+        <div className="row-copy">
+          <span>{def.name}</span>
+          <p className={configured ? "provider-status" : "provider-hint"}>{configured ? maskKey(savedKey) : def.hint}</p>
+        </div>
+        <div className="row-control">
+          {!def.oauthOnly && (
+            <button className="secondary-button" onClick={() => setOpen((v) => !v)}>
+              {configured ? t("settings.aiManage") : t("settings.aiConnect")}
+            </button>
+          )}
+        </div>
+      </div>
+      {open && !def.oauthOnly && (
+        <div className="settings-row">
+          <div className="row-copy"><span>{def.envVar ?? def.name}</span></div>
+          <div className="row-control">
+            <input type="password" autoComplete="off" maxLength={500} className="settings-input" value={input} onChange={(e) => setInput(e.target.value)} placeholder={t("settings.aiKeyPlaceholder")} spellCheck={false} />
+            <button className="secondary-button" onClick={() => { if (input.trim()) { onSave(input.trim()); setInput(""); setOpen(false); } }}>{t("settings.aiSaveKey")}</button>
+            {configured && <button className="danger-button" onClick={() => { onRemove(); setOpen(false); }}>{t("settings.aiRemove")}</button>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }

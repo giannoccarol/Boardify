@@ -296,6 +296,61 @@ fn get_stats(state: State<AppState>) -> Result<serde_json::Value, String> {
     db.stats().map_err(|e| e.to_string())
 }
 
+/// Proxy HTTP per le API AI: la webview applica il CORS e alcuni provider
+/// (o Ollama senza OLLAMA_ORIGINS) rifiutano le chiamate browser. Rust no.
+/// Solo https, oppure http verso localhost (Ollama). Timeout limitato.
+#[tauri::command]
+async fn ai_proxy(
+    url: String,
+    headers: std::collections::HashMap<String, String>,
+    body: Option<serde_json::Value>,
+    timeout_ms: u64,
+) -> Result<serde_json::Value, String> {
+    let http_local =
+        url.starts_with("http://localhost") || url.starts_with("http://127.0.0.1");
+    if !(url.starts_with("https://") || http_local) {
+        return Err("URL non valido: solo https o localhost".into());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(timeout_ms.clamp(1_000, 120_000)))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut req = if let Some(b) = &body {
+        client.post(&url).json(b)
+    } else {
+        client.get(&url)
+    };
+    for (k, v) in &headers {
+        req = req.header(k, v);
+    }
+    let res = req.send().await.map_err(|e| format!("Rete: {e}"))?;
+    let status = res.status();
+    let text = res.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("HTTP {}: {}", status.as_u16(), ai_error_detail(&text)));
+    }
+    if text.trim().is_empty() {
+        return Ok(serde_json::Value::Null);
+    }
+    serde_json::from_str(&text).map_err(|e| format!("Risposta non JSON: {e}"))
+}
+
+fn ai_error_detail(text: &str) -> String {
+    if let Ok(j) = serde_json::from_str::<serde_json::Value>(text) {
+        if let Some(m) = j
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+        {
+            return m.chars().take(300).collect();
+        }
+        if let Some(m) = j.get("message").and_then(|m| m.as_str()) {
+            return m.chars().take(300).collect();
+        }
+    }
+    text.chars().take(300).collect()
+}
+
 // ── Finestre: toggle shelf/library ─────────────────────────────
 
 static CAPTURE_GEN: AtomicU64 = AtomicU64::new(0);
@@ -852,6 +907,7 @@ fn main() {
             create_category,
             assign_category,
             get_stats,
+            ai_proxy,
             show_window,
             hide_window,
             toggle_pin,

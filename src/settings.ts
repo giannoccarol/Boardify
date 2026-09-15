@@ -2,6 +2,8 @@ export type ClipSize = "sm" | "md" | "lg";
 export type ClickAction = "copy-hide" | "copy" | "select";
 export type LibraryView = "card" | "list" | "board";
 export type Locale = "en" | "it";
+// Livelli di thinking alla Pi Desktop (opachi, mappati per provider in src/ai/client.ts).
+export type AiEffort = "off" | "minimal" | "medium" | "high";
 
 export interface Settings {
   clipSize: ClipSize;
@@ -17,6 +19,12 @@ export interface Settings {
   shortcutsEnabled: boolean;
   shelfShortcut: string;
   locale: Locale;
+  aiEnabled: boolean;
+  aiProvider: string;
+  aiModel: string;
+  aiEffort: AiEffort;
+  aiKeys: Record<string, string>;
+  aiBaseUrl: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -35,6 +43,12 @@ export const DEFAULT_SETTINGS: Settings = {
   shortcutsEnabled: true,
   shelfShortcut: "Ctrl+Super+V",
   locale: "en",
+  aiEnabled: false,
+  aiProvider: "openrouter",
+  aiModel: "",
+  aiEffort: "medium",
+  aiKeys: {},
+  aiBaseUrl: "",
 };
 
 export const KIND_IDS = ["all", "text", "link", "code", "color", "image"] as const;

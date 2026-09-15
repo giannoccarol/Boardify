@@ -32,6 +32,15 @@ body {
   backface-visibility: hidden;
 }
 
+/* Liste lunghe: il browser salta layout/paint delle card fuori viewport.
+   Stessi pixel, niente cambi visuali; `auto` ricorda l'altezza reale
+   dopo il primo render così la scrollbar resta stabile. */
+.clip-card,
+.clip-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 150px;
+}
+
 .glass {
   background: #0c0c0e;
   border: 1px solid rgba(255, 255, 255, 0.10);
@@ -140,6 +149,12 @@ kbd { font-family: inherit; font-size: 10px; border-radius: 5px; border: 1px sol
 .segmented-control button:hover { color: #e8e9ed; }
 .segmented-control .is-active { color: #ecedf1; background: #35373e; box-shadow: 0 1px 3px #0005, inset 0 1px 0 #ffffff0f; }
 .settings-select { max-width: 100%; background: #2b2d32; border: 1px solid #ffffff0c; color: #dfe1e8; border-radius: 7px; padding: 7px 9px; font-size: 11px; }
+.settings-input { width: 100%; background: #2b2d32; border: 1px solid #ffffff0c; color: #dfe1e8; border-radius: 7px; padding: 7px 9px; font-size: 11px; }
+.settings-input::placeholder { color: #6d727d; }
+.row-control { display: flex; align-items: center; justify-content: flex-end; gap: 7px; min-width: 0; }
+.row-control .settings-input { min-width: 140px; }
+.provider-status { color: var(--accent); }
+.provider-hint { color: #8f97a4; font-size: 11px; }
 .view-options { padding: 12px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .view-option { min-width: 0; text-align: left; padding: 10px 10px 12px; border-radius: 9px; border: 1px solid #ffffff0a; background: #141518; }
 .view-option:hover { border-color: #ffffff28; }
@@ -400,6 +415,22 @@ kbd { font-family: inherit; font-size: 10px; border-radius: 5px; border: 1px sol
 .preview-author { margin-top: 3px; font-size: 10px; color: #8c8c95; }
 .preview-link { display: block; max-width: 100%; padding: 6px 10px; margin: 12px 0 0 -5px; border-radius: 999px; font-size: 11px; color: #a9a9b2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .preview-mini-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 28px; padding: 5px 10px; border-radius: 999px; background: #ffffff07; color: #babac2; font-size: 10px; max-width: 100%; overflow-wrap: anywhere; }
+
+/* AI contestuale: dropdown nella toolbar + box risultato inline. */
+.ai-menu-wrap { position: relative; }
+.ai-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 50; min-width: 200px; max-width: 240px; padding: 6px; border-radius: 12px; }
+.ai-menu-item { display: block; width: 100%; text-align: left; font-size: 11.5px; padding: 7px 10px; border-radius: 8px; color: #dfe1e8; }
+.ai-menu-item:hover { background: #ffffff10; }
+.ai-menu-hint { font-size: 11px; color: #8f97a4; padding: 8px 10px; line-height: 1.5; }
+.ai-result { margin-top: 12px; border: 1px solid var(--line); border-radius: 12px; background: #ffffff05; padding: 12px; }
+.ai-result-head { display: flex; align-items: center; gap: 7px; font-size: 11px; color: #cdd0d9; margin-bottom: 8px; }
+.ai-result-head > button { margin-left: auto; }
+.ai-text { white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.6; color: #e8e9ed; max-height: 260px; overflow: auto; }
+.ai-note { font-size: 11px; color: #8f97a4; line-height: 1.5; margin-bottom: 6px; }
+.ai-note strong { color: #cdd0d9; }
+.ai-error { font-size: 11.5px; color: #eaa7a7; line-height: 1.5; }
+.ai-loading { font-size: 11.5px; color: #8f97a4; }
+.ai-result-actions { display: flex; gap: 7px; margin-top: 10px; flex-wrap: wrap; }
 .preview-footer { display: flex; align-items: center; gap: 14px; padding: 11px 16px; border-top: 1px solid #ffffff07; font-size: 9px; color: #85858e; }
 .preview-footer > span { display: inline-flex; align-items: center; gap: 6px; }
 .preview-footer-hint { margin-left: auto; }

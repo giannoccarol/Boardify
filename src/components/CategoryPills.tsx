@@ -3,6 +3,8 @@ import { motion } from "framer-motion";
 import { Plus } from "lucide-react";
 import { snappy } from "../motion";
 import { useT } from "../i18n";
+import { useBoardify } from "../store";
+import { aiReadiness } from "../ai/readiness";
 import type { Category } from "../types";
 
 interface Props {
@@ -15,8 +17,12 @@ interface Props {
 
 export function CategoryPills({ categories, active, onSelect, onCreate, layoutId }: Props) {
   const { t } = useT();
+  const settings = useBoardify((s) => s.settings);
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
+  // Categorie custom solo con AI pronta (è lei ad assegnarle davvero),
+  // altrimenti restano quelle automatiche.
+  const { ready: canCreate } = aiReadiness(settings, t);
 
   const historyCount = categories.find((c) => c.name === "History")?.count ?? 0;
   // Smart: compaiono solo le categorie che hanno davvero contenuto (count > 0).
@@ -59,7 +65,7 @@ export function CategoryPills({ categories, active, onSelect, onCreate, layoutId
           </button>
         );
       })}
-      {adding ? (
+      {canCreate && (adding ? (
         <input
           autoFocus
           value={name}
@@ -83,7 +89,7 @@ export function CategoryPills({ categories, active, onSelect, onCreate, layoutId
         >
           <Plus className="w-3.5 h-3.5" />
         </button>
-      )}
+      ))}
     </div>
   );
 }

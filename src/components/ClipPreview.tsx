@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { motion, useReducedMotion } from "framer-motion";
-import { Copy, ExternalLink, Link2, X, Pin, Star, QrCode, Mail, Phone, MapPin, FolderOpen, Image as ImageIcon, FileText, Code2, Palette, Clock3, Check } from "lucide-react";
+import { Copy, ExternalLink, Link2, X, Pin, Star, QrCode, Mail, Phone, MapPin, FolderOpen, Image as ImageIcon, FileText, Code2, Palette, Clock3, Check, Sparkles } from "lucide-react";
 import { useClipImageSrc } from "../clipImage";
 import type { Clip } from "../types";
 import { byteSize, imageDimensions, prettyApp, timeAgo } from "../types";
@@ -13,6 +13,11 @@ import { parseUnit } from "../units";
 import { extractEmail, extractFilePath, extractPhone, extractPlaceholders, isAbsolutePath, isDirectVideo, isLikelyAddress, isQrPayload, isVideoUrl, toMapsUrl } from "../smartActions";
 import { useBoardify } from "../store";
 import { isTauri } from "../demo";
+import { isRasterDataUrl } from "../ai/client";
+import { useAiAssistant } from "../ai/useAi";
+import { AiMenu } from "../ai/AiMenu";
+import { AiPanel } from "../ai/AiPanel";
+import type { AiActionCtx } from "../ai/prompts";
 import { soft } from "../motion";
 import { AppBadge } from "./AppBadge";
 import { useT, type DictKey } from "../i18n";
@@ -142,6 +147,23 @@ export function ClipPreview({ clip }: { clip: Clip }) {
   const gradient = parseGradientCss(raw);
   const BadgeIcon = clip.kind === "image" || dataImage || svgImage ? ImageIcon : colorHex || gradient ? Palette : clip.kind === "code" ? Code2 : url ? Link2 : FileText;
   const dimensions = imageDimensions(clip);
+
+  const aiCtx: AiActionCtx = useMemo(() => ({
+    url,
+    colorHex,
+    langLabel: lang?.label ?? null,
+    email: smart.email,
+    phone: smart.phone,
+    hasPath: !!smart.path,
+    isAddress: smart.address,
+    placeholders: smart.placeholders,
+    isQr: isQrPayload(clip.text ?? clip.preview),
+    unitTitle: unit?.title ?? null,
+    imageDataUrl: fileSrc ?? (dataImage && isRasterDataUrl(dataImage) ? dataImage : null),
+  }), [url, colorHex, lang, smart, unit, fileSrc, dataImage, clip.text, clip.preview]);
+  const ai = useAiAssistant(clip, aiCtx);
+
+  useEffect(() => { ai.reset(); }, [clip.id]);
   const copyOptions = useMemo(() => {
     const text = clip.text ?? clip.preview;
     return copyOptionsFor(clip, {
@@ -196,6 +218,14 @@ export function ClipPreview({ clip }: { clip: Clip }) {
               <QrCode className="w-3.5 h-3.5" />
             </Tool>
           )}
+          <div className="ai-menu-wrap">
+            <Tool title={t("ai.menu")} active={ai.menuOpen} onClick={() => ai.setMenuOpen((v) => !v)}>
+              <Sparkles className="w-3.5 h-3.5" />
+            </Tool>
+            {ai.menuOpen && (
+              <AiMenu actions={ai.actions} disabledReason={ai.disabledReason} onPick={ai.pick} />
+            )}
+          </div>
           <Tool title={t("action.pin")} active={!!clip.is_pinned} onClick={() => s.togglePin(clip.id)}>
             <Pin className={`w-3.5 h-3.5 ${clip.is_pinned ? "fill-current" : ""}`} />
           </Tool>
@@ -253,6 +283,7 @@ export function ClipPreview({ clip }: { clip: Clip }) {
 
       </div>
       <div className="preview-details">
+        <AiPanel ai={ai} clipId={clip.id} />
         {copyOptions.length > 0 && (
           <div className="mt-3">
             <p className="eyebrow">{t("library.copyAs")}</p>
