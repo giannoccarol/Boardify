@@ -37,7 +37,7 @@ const shelfEmerge: Transition = {
   ease: [[0.16, 1, 0.3, 1], [0.45, 0, 0.2, 1]],
 };
 const shelfRetreat: Transition = {
-  type: "tween", duration: 0.3, times: [0, 0.45, 1],
+  type: "tween", duration: 0.3, times: [0, 0.5, 1],
   ease: [[0.55, 0, 0.75, 0.4], [0.16, 1, 0.3, 1]],
 };
 
@@ -64,13 +64,18 @@ export const shelfVariants: Variants = {
   },
   collapse: {
     opacity: 1, y: 0, scaleX: 1.035, scaleY: 0.3,
-    transition: { duration: 0.22, ease: [0.4, 0, 0.6, 1] },
+    transition: {
+      y: soft,
+      scaleX: shelfDeflate,
+      scaleY: shelfDeflate,
+      opacity: { duration: 0.08, ease: "easeOut" },
+    },
   },
   exit: {
-    opacity: [1, 0.35, 0],
-    y: [0, -3, -42],
-    scaleX: [1.035, 0.17, 0.075],
-    scaleY: [0.3, 0.15, 0.07],
+    opacity: [1, 0, 0],
+    y: [0, -10, -42],
+    scaleX: [1.035, 0.42, 0.22],
+    scaleY: [0.3, 0.2, 0.12],
     transition: shelfRetreat,
   },
 };
@@ -88,13 +93,9 @@ export const shelfSeedVariants: Variants = {
   },
   shown: { opacity: 0, transition: { duration: 0 } },
   collapse: { opacity: 0, y: 0, scaleX: 4, scaleY: 0.75, transition: { duration: 0 } },
-  exit: {
-    opacity: [0, 1, 0],
-    y: [0, -3, -42],
-    scaleX: [4, 1.15, 0.7],
-    scaleY: [0.75, 1, 0.7],
-    transition: shelfRetreat,
-  },
+  // In chiusura il seed non lampeggia: la finestra svanisce da barra,
+  // non c'è origine da mascherare e niente notch dietro cui ritirarsi.
+  exit: { opacity: 0, transition: { duration: 0.1 } },
 };
 
 // Il contenuto entra quando la superficie è già aperta: niente testo schiacciato
@@ -120,7 +121,7 @@ export const shelfGleamVariants: Variants = {
     scaleY: 1,
     transition: { ...soft, opacity: { duration: 0.5, times: [0, 0.3, 1] } },
   },
-  collapse: { opacity: 0.25, transition: { duration: 0.16 } },
+  collapse: { opacity: 0, transition: { duration: 0.12 } },
   exit: { opacity: 0, transition: { duration: 0.15 } },
 };
 

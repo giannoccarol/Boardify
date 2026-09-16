@@ -119,6 +119,22 @@ test.describe("shelf bubble entrance", () => {
     const errors = watchConsole(page);
     await page.goto("/?view=shelf&heavy=36");
     await expectSettled(page);
+    // Traccia forma+opacità: la pillola non deve mai restare visibile
+    // (niente notch dietro cui ritirarsi) — svanisce da barra.
+    const trace = page.evaluate(() => new Promise<Array<{ x: number; o: number }>>((resolve) => {
+      const frames: Array<{ x: number; o: number }> = [];
+      const t0 = performance.now();
+      const sample = () => {
+        const panel = document.querySelector<HTMLElement>(".shelf-window");
+        if (panel) {
+          const style = getComputedStyle(panel);
+          frames.push({ x: new DOMMatrixReadOnly(style.transform).a, o: Number(style.opacity) });
+        }
+        if (performance.now() - t0 > 1500) resolve(frames);
+        else requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    }));
     let closeMs = 0;
     const frames = await sampleFrames(page, 1000, async () => {
       closeMs = await measureUntil(
@@ -130,6 +146,10 @@ test.describe("shelf bubble entrance", () => {
     expectBudget(frames.p95, 120, "shelf close p95");
     await expect(page.locator(".shelf-window")).toHaveCSS("opacity", "0");
     await expect(page.locator(".shelf-window").locator("..")).toHaveAttribute("inert", "");
+    await expect(page.locator(".shelf-seed")).toHaveCSS("opacity", "0");
+    const shapes = await trace;
+    expect(shapes.length).toBeGreaterThan(5);
+    expect(shapes.every((s) => s.x > 0.35 || s.o < 0.1)).toBe(true);
     console.log(`shelf close: ${closeMs}ms, p95=${frames.p95.toFixed(1)}ms`);
     expect(errors).toEqual([]);
   });
