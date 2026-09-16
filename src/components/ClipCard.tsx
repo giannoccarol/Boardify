@@ -137,6 +137,7 @@ export const ClipCard = memo(function ClipCard({ clip, selected, index, variant 
         onMouseDown={(e) => e.stopPropagation()}
         onDragStartCapture={(e: DragEvent) => {
           if ((e.target as HTMLElement).closest("button")) { e.preventDefault(); return; }
+          try { e.dataTransfer.setData("text/boardify-clip", clip.id); } catch { /* drag-out Tauri: ignora */ }
           const run = ++dragRun.current;
           draggedAt.current = performance.now();
           setDragging(true);

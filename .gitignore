@@ -15,3 +15,7 @@ src-tauri/gen/
 test-results/
 playwright-report/
 playwright/.cache
+
+# goal-loop session state, never committed
+.opencode/goal.md
+.opencode/goal-evidence/

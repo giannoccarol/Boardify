@@ -10,7 +10,7 @@ import { clipColor, contrastRatio, harmonies, isDataImage, isSvgMarkup, parseGra
 import { copyOptionsFor } from "../copyFormats";
 import { formatCode, guessLang, tokensByLine, tokenizeCode } from "../code";
 import { parseUnit } from "../units";
-import { extractEmail, extractFilePath, extractPhone, extractPlaceholders, isAbsolutePath, isDirectVideo, isLikelyAddress, isQrPayload, isVideoUrl, toMapsUrl } from "../smartActions";
+import { extractEmail, extractFilePath, extractPhone, extractPlaceholders, fillTemplate, isAbsolutePath, isDirectVideo, isLikelyAddress, isQrPayload, isVideoUrl, toMapsUrl } from "../smartActions";
 import { useBoardify } from "../store";
 import { isTauri } from "../demo";
 import { isRasterDataUrl } from "../ai/client";
@@ -435,11 +435,7 @@ export function ClipPreview({ clip }: { clip: Clip }) {
           </div>
         )}
         {smart.placeholders.length > 0 && (
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            {smart.placeholders.map((p) => (
-              <MiniBtn key={p} label={p} onClick={() => s.copyText(p)} />
-            ))}
-          </div>
+          <TemplateFiller text={clip.text ?? clip.preview} placeholders={smart.placeholders} />
         )}
         {colorHex && <ColorDetails hex={colorHex} />}
         {(smart.email || smart.phone || smart.path || smart.address) && (
@@ -592,6 +588,45 @@ function MiniBtn({ label, onClick, icon }: { label: string; onClick: () => void;
       {icon}
       {label}
     </motion.button>
+  );
+}
+
+/** Compila i segnaposto del template e copia il risultato. */
+function TemplateFiller({ text, placeholders }: { text: string; placeholders: string[] }) {
+  const copyText = useBoardify((s) => s.copyText);
+  const { t } = useT();
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [done, setDone] = useState(false);
+  const apply = async () => {
+    const { filled } = fillTemplate(text, values);
+    if (await copyText(filled)) {
+      setDone(true);
+      setTimeout(() => setDone(false), 1200);
+    }
+  };
+  return (
+    <div className="template-filler mt-3 flex flex-col gap-1.5">
+      {placeholders.map((p) => (
+        <label key={p} className="flex items-center gap-2 text-[12px] text-zinc-400">
+          <span className="shrink-0 max-w-[40%] truncate font-mono">{p}</span>
+          <input
+            value={values[p] ?? ""}
+            onChange={(e) => setValues((v) => ({ ...v, [p]: e.target.value }))}
+            placeholder={p}
+            aria-label={p}
+            spellCheck={false}
+            className="flex-1 min-w-0 bg-white/[0.06] rounded-lg px-2.5 py-1.5 text-[12.5px] text-white outline-none ring-1 ring-white/10 focus:ring-white/25"
+          />
+        </label>
+      ))}
+      <div>
+        <MiniBtn
+          label={done ? t("card.copied") : t("library.fillAndCopy")}
+          icon={done ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+          onClick={() => void apply()}
+        />
+      </div>
+    </div>
   );
 }
 

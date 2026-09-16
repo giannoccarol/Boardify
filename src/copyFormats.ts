@@ -5,6 +5,7 @@ import type { Clip } from "./types";
 import type { DictKey } from "./i18n";
 import { formatCode } from "./code";
 import { formatColor, hexToRgb } from "./color";
+import { stripTrackingParams } from "./smartActions";
 import { toHtml, toMarkdown, toQrSvg } from "./linkActions";
 
 export interface CopyOption {
@@ -60,6 +61,10 @@ function colorOptions(hex: string): CopyOption[] {
 function linkOptions(ctx: CopyCtx): CopyOption[] {
   const url = ctx.url!;
   const out: CopyOption[] = [{ id: "url", labelKey: "library.copyAs.url", value: url }];
+  const clean = stripTrackingParams(url);
+  if (clean && clean !== url) {
+    out.push({ id: "clean-url", labelKey: "library.copyAs.cleanUrl", value: clean });
+  }
   out.push({ id: "markdown", labelKey: "library.copyAs.markdown", value: toMarkdown(url, ctx.linkTitle) });
   out.push({ id: "html", labelKey: "library.copyAs.html", value: toHtml(url, ctx.linkTitle) });
   if (ctx.linkTitle && ctx.linkTitle !== url) {

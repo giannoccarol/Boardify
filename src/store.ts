@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { copyInBrowser } from "./clipboard";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Category, Clip } from "./types";
+import type { Category, Clip, Space } from "./types";
 import { DEMO_CATEGORIES, DEMO_CLIPS, isTauri } from "./demo";
 import { DEFAULT_SETTINGS, parseSearch, type Settings } from "./settings";
 import { closeShelf } from "./shelfWindow";
@@ -14,6 +14,11 @@ const demoPin = new Map<string, boolean>();
 const demoDeleted = new Set<string>();
 const demoNotes: Clip[] = [];
 const demoReminders = new Map<string, string>();
+const demoSpaces: Space[] = [
+  { id: "demo-lavoro", name: "Lavoro", icon: "💼", query_json: JSON.stringify({ category: "Email" }), is_smart: true, count: 0 },
+  { id: "demo-ricette", name: "Ricette", icon: "🍳", query_json: "", is_smart: false, count: 0 },
+];
+const demoSpaceAssign = new Map<string, Set<string>>();
 
 function loadDemoReminders() {
   try {
@@ -55,6 +60,8 @@ interface BoardifyState {
   view: View;
   clips: Clip[];
   categories: Category[];
+  spaces: Space[];
+  spaceId: string | null;
   reminders: Clip[];
   query: string;
   kindFilter: string;
@@ -76,6 +83,7 @@ interface BoardifyState {
   setQuery: (q: string) => void;
   setKind: (k: string) => void;
   setCategory: (c: string) => void;
+  setSpace: (id: string | null) => void;
   setFavOnly: (b: boolean) => void;
   setPinnedOnly: (b: boolean) => void;
   select: (id: string | null) => void;
@@ -89,6 +97,7 @@ interface BoardifyState {
   loadSettings: () => Promise<void>;
 
   refresh: () => Promise<void>;
+  refreshSpaces: () => Promise<void>;
   loadReminders: () => Promise<void>;
   search: () => Promise<void>;
   copyClip: (id: string, hide?: boolean) => Promise<boolean>;
@@ -105,6 +114,12 @@ interface BoardifyState {
   createCategory: (name: string) => Promise<void>;
   ensureCategoryByName: (name: string) => Promise<Category | null>;
   assignCategory: (clipId: string, categoryId: string, assign: boolean) => Promise<void>;
+  createSpace: (name: string, icon?: string, queryJson?: string, isSmart?: boolean) => Promise<void>;
+  deleteSpace: (id: string) => Promise<void>;
+  assignSpace: (clipId: string, spaceId: string, assign: boolean) => Promise<void>;
+  backupNow: () => Promise<string | null>;
+  exportToClipboard: () => Promise<number>;
+  importBackupJson: (json: string) => Promise<{ imported: number; skipped: number }>;
   insertNote: (text: string) => Promise<void>;
   openLibrary: () => Promise<void>;
   openSettings: () => Promise<void>;
@@ -145,6 +160,8 @@ async function persistSettings(s: Settings) {
       shortcutsEnabled: s.shortcutsEnabled,
       notchEnabled: s.notchEnabled,
       shelfShortcut: s.shelfShortcut,
+      auto_paste: s.autoPaste,
+      max_items: s.maxItems,
     });
   } catch {
     /* store plugin opzionale in preview */
@@ -152,9 +169,28 @@ async function persistSettings(s: Settings) {
 }
 
 function applyClientFilters(clips: Clip[], get: () => BoardifyState): Clip[] {
-  const { kindFilter, categoryFilter, favOnly, pinnedOnly, query } = get();
+  const { kindFilter, categoryFilter, favOnly, pinnedOnly, query, spaceId, spaces } = get();
   const parsed = parseSearch(query);
   let out = clips;
+  if (spaceId) {
+    const sp = spaces.find((s) => s.id === spaceId);
+    if (sp) {
+      if (sp.is_smart && sp.query_json) {
+        try {
+          const q = JSON.parse(sp.query_json) as { kind?: string; category?: string; search?: string; favorites_only?: boolean };
+          if (q.kind) out = out.filter((c) => c.kind === q.kind);
+          if (q.category) out = out.filter((c) => c.categories.includes(q.category!));
+          if (q.favorites_only) out = out.filter((c) => c.is_favorite);
+          if (q.search) {
+            const needle = q.search.toLowerCase();
+            out = out.filter((c) => (c.preview + (c.text ?? "")).toLowerCase().includes(needle));
+          }
+        } catch { /* query malformata: nessun filtro space */ }
+      } else {
+        out = out.filter((c) => demoSpaceAssign.get(c.id)?.has(spaceId));
+      }
+    }
+  }
   const kind = parsed.kind ?? (kindFilter === "all" ? undefined : kindFilter);
   if (kind) out = out.filter((c) => c.kind === kind);
   const category = parsed.category ?? (categoryFilter === "all" ? undefined : categoryFilter);
@@ -181,6 +217,8 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
   })(),
   clips: [],
   categories: [],
+  spaces: [],
+  spaceId: null,
   reminders: [],
   query: "",
   kindFilter: "all",
@@ -210,6 +248,10 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
   },
   setCategory: (categoryFilter) => {
     set({ categoryFilter });
+    get().refresh();
+  },
+  setSpace: (spaceId) => {
+    set({ spaceId });
     get().refresh();
   },
   setFavOnly: (favOnly) => {
@@ -264,27 +306,42 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
       set((s) => ({
         clips,
         categories: DEMO_CATEGORIES,
+        spaces: demoSpaces.map((sp) => ({
+          ...sp,
+          count: sp.is_smart ? applyClientFilters(demoClips(), () => ({ ...get(), spaceId: sp.id }) as BoardifyState).length : [...demoSpaceAssign.values()].filter((set) => set.has(sp.id)).length,
+        })),
         reminders: demoReminderClips(),
         selectedId: s.selectedId && clips.some((c) => c.id === s.selectedId) ? s.selectedId : clips[0]?.id ?? null,
         loading: false,
       }));
       return;
     }
-    const { kindFilter, categoryFilter, favOnly, query } = get();
+    const { kindFilter, categoryFilter, favOnly, query, spaceId } = get();
     const parsed = parseSearch(query);
     if (parsed.text) return get().search();
     set({ loading: true });
     try {
-      const [clipsRaw, categories] = await Promise.all([
-        invoke<Clip[]>("get_clips", {
-          limit: 200,
-          kind: parsed.kind ?? (kindFilter === "all" ? null : kindFilter),
-          category: parsed.category ?? (categoryFilter === "all" ? null : categoryFilter),
-          favoritesOnly: favOnly,
-        }),
+      const [clipsRaw, categories, spaces] = await Promise.all([
+        spaceId
+          ? invoke<Clip[]>("get_space_clips", { spaceId, limit: 200 })
+          : invoke<Clip[]>("get_clips", {
+              limit: 200,
+              kind: parsed.kind ?? (kindFilter === "all" ? null : kindFilter),
+              category: parsed.category ?? (categoryFilter === "all" ? null : categoryFilter),
+              favoritesOnly: favOnly,
+            }),
         invoke<Category[]>("get_categories"),
+        invoke<Space[]>("get_spaces").catch(() => [] as Space[]),
       ]);
       let clips = clipsRaw;
+      // Quando uno Space è attivo, kind/category/fav restano filtri client sopra il set dello Space.
+      if (spaceId) {
+        const kind = parsed.kind ?? (kindFilter === "all" ? undefined : kindFilter);
+        if (kind) clips = clips.filter((c) => c.kind === kind);
+        const category = parsed.category ?? (categoryFilter === "all" ? undefined : categoryFilter);
+        if (category) clips = clips.filter((c) => c.categories.includes(category));
+        if (favOnly) clips = clips.filter((c) => c.is_favorite);
+      }
       if (get().pinnedOnly) clips = clips.filter((c) => c.is_pinned);
       if (parsed.app) {
         const a = parsed.app;
@@ -293,11 +350,20 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
       set((s) => ({
         clips,
         categories,
+        spaces,
         selectedId: s.selectedId && clips.some((c) => c.id === s.selectedId) ? s.selectedId : clips[0]?.id ?? null,
       }));
     } finally {
       set({ loading: false });
     }
+  },
+
+  refreshSpaces: async () => {
+    if (!isTauri()) return;
+    try {
+      const spaces = await invoke<Space[]>("get_spaces");
+      set({ spaces });
+    } catch { /* best-effort */ }
   },
 
   search: async () => {
@@ -541,6 +607,66 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
     await invoke("assign_category", { clipId, categoryId, assign });
     await get().refresh();
   },
+  createSpace: async (name, icon, queryJson, isSmart) => {
+    const clean = name.trim();
+    if (!clean) return;
+    if (!isTauri()) {
+      set((s) => ({
+        spaces: [...s.spaces, { id: clean, name: clean, icon: icon ?? "", query_json: queryJson ?? "", is_smart: !!isSmart, count: 0 }],
+      }));
+      return;
+    }
+    await invoke("create_space", { name: clean, icon: icon ?? null, queryJson: queryJson ?? null, isSmart: !!isSmart });
+    await get().refreshSpaces();
+  },
+  deleteSpace: async (id) => {
+    if (!isTauri()) {
+      for (const set of demoSpaceAssign.values()) set.delete(id);
+      set((s) => ({ spaces: s.spaces.filter((x) => x.id !== id), spaceId: s.spaceId === id ? null : s.spaceId }));
+      await get().refresh();
+      return;
+    }
+    await invoke("delete_space", { id });
+    if (get().spaceId === id) set({ spaceId: null });
+    await get().refreshSpaces();
+    await get().refresh();
+  },
+  assignSpace: async (clipId, spaceId, assign) => {
+    if (!isTauri()) {
+      const set = demoSpaceAssign.get(clipId) ?? new Set<string>();
+      if (assign) set.add(spaceId);
+      else set.delete(spaceId);
+      demoSpaceAssign.set(clipId, set);
+      await get().refresh();
+      return;
+    }
+    await invoke("assign_space", { clipId, spaceId, assign });
+    await get().refreshSpaces();
+  },
+  backupNow: async () => {
+    if (!isTauri()) return null;
+    return await invoke<string>("backup_now");
+  },
+  exportToClipboard: async () => {
+    if (!isTauri()) {
+      const json = JSON.stringify(demoClips());
+      await get().copyText(json);
+      return demoClips().length;
+    }
+    const json = await invoke<string>("export_clips");
+    await get().copyText(json);
+    try {
+      return (JSON.parse(json) as unknown[]).length;
+    } catch {
+      return 0;
+    }
+  },
+  importBackupJson: async (json) => {
+    if (!isTauri()) throw new Error("Tauri only");
+    const r = await invoke<{ imported: number; skipped: number }>("import_clips", { json });
+    await get().refresh();
+    return r;
+  },
   insertNote: async (text) => {
     if (isTauri()) {
       await invoke("insert_note", { text });
@@ -601,6 +727,7 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
 export function initRealtime() {
   if (!isTauri()) return;
   listen<string>("copy-failed", ({ payload }) => useBoardify.setState({ copyError: payload }));
+  listen<string>("paste-failed", ({ payload }) => useBoardify.setState({ copyError: payload }));
   listen("clips-changed", () => {
     const { query } = useBoardify.getState();
     if (query.trim()) useBoardify.getState().search();
@@ -608,6 +735,9 @@ export function initRealtime() {
   });
   listen("reminders-changed", () => {
     useBoardify.getState().loadReminders();
+  });
+  listen("spaces-changed", () => {
+    useBoardify.getState().refreshSpaces();
   });
   listen<Clip>("reminder-due", ({ payload }) => {
     useBoardify.setState({ reminderDueId: payload.id });

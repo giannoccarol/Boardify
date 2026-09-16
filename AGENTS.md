@@ -1,6 +1,6 @@
 # AGENTS.md — Boardify
 
-Clipboard manager Tauri v2 + React per Linux e Windows. Local-first: niente network tranne oEmbed/iframe nelle preview.
+Clipboard manager Tauri v2 + React per Linux e Windows. Local-first: niente network tranne oEmbed/iframe nelle preview, updater e proxy AI via Rust.
 
 ## Comandi (prima di dire "fatto")
 
@@ -20,7 +20,7 @@ npm run shots      # PNG del README (docs/shots/, serve Chromium)
 - **Ogni feature visibile: test e2e con budget.** Nuova vista/lista/filtro/animazione = spec in `e2e/` che misura (render/search/frame) con `e2e/helpers/perf.ts`. Vedi `.agents/skills/perf-e2e/SKILL.md`. `npm run e2e` verde prima di dire "fatto".
 - **Windows-compat sempre.** Ogni feature deve compilare e girare su Linux E Windows. Mai codice `std::os::unix` / path assoluti Linux (`/usr/...`) / shell-out Linux (`sh`, `hyprctl`, `grim`, `slurp`...) senza fallback `#[cfg(target_os = ...)]` che degrada con messaggio chiaro. Dipendenze Linux-only solo in `[target.'cfg(target_os = "linux")'.dependencies]`. Dettagli in `.agents/skills/dev-workflow/SKILL.md`.
 - **DB:** migrazioni in `db.rs::migrate`, mai breaking senza rename/backfill. SQLite in `~/.local/share/boardify/clips.db` (Linux) / `%APPDATA%\boardify\clips.db` (Windows) via `dirs::data_dir()`.
-- **Niente paste-injection:** dopo il copy non iniettare tasti (né su Wayland né su Windows), l'utente preme `Ctrl+V`. Niente `sudo`/comandi privilegiati per testare.
+- **Auto-paste opt-in (deroga approvata):** default OFF, mai su Wayland senza portal/libei. Se `settings.autoPaste=true`: `copy_clip` → `hide_window` → `paste.rs::paste_ctrl_v()` (Windows `SendInput`, Linux X11 `enigo`, Wayland solo via portal altrimenti fallback copy+toast `premi Ctrl+V`). Niente `sudo`/comandi privilegiati per testare.
 - **Mai commit/push senza permesso esplicito.** Dipendenze morte: rimuoverle (`fuse.js` docet).
 
 ## Dove sta cosa

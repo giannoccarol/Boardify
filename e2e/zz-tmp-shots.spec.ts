@@ -3,6 +3,16 @@ import { cards, gotoView } from "./helpers/perf";
 
 test("tmp screenshots menus", async ({ page }) => {
   await gotoView(page, "shelf");
+  // Il menu AI esiste solo con AI abilitata (come in ai-menu.spec.ts).
+  await page.evaluate(() => {
+    const raw = localStorage.getItem("boardify-settings");
+    const s = raw ? JSON.parse(raw) : {};
+    localStorage.setItem(
+      "boardify-settings",
+      JSON.stringify({ ...s, aiEnabled: true, aiProvider: "ollama", aiModel: "llama3.3" }),
+    );
+  });
+  await page.reload();
   const n = await cards(page).count();
   expect(n).toBeGreaterThan(0);
   let found = false;

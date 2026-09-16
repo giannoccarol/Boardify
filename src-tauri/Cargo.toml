@@ -19,7 +19,9 @@ tauri-plugin-opener = "2"
 tauri-plugin-store = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
+rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl", "chrono"] }
+# Chiave DB in OS credential store (Secret Service Linux / Credential Manager Windows).
+keyring = "3"
 chrono = { version = "0.4", features = ["serde"] }
 arboard = "3"
 sha2 = "0.10"
@@ -30,6 +32,9 @@ image = { version = "0.25", features = ["png", "jpeg"] }
 active-win-pos-rs = "0.7"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
+# Input sintetico SOLO per auto-paste opt-in (deroga AGENTS.md): X11/Windows stabili,
+# Wayland solo portal (fallback copy+toast). Default OFF, mai in CI/test.
+enigo = "0.6"
 # Proxy HTTP per le API AI (la webview applica il CORS, Rust no). rustls = pure-Rust, ok Linux+Windows.
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 tauri-plugin-drag = "2.1.1"

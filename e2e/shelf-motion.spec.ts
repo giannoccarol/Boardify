@@ -146,7 +146,11 @@ test.describe("shelf bubble entrance", () => {
     expectBudget(frames.p95, 120, "shelf close p95");
     await expect(page.locator(".shelf-window")).toHaveCSS("opacity", "0");
     await expect(page.locator(".shelf-window").locator("..")).toHaveAttribute("inert", "");
-    await expect(page.locator(".shelf-seed")).toHaveCSS("opacity", "0");
+    // In reduced-motion il seed decorativo non è proprio renderizzato (!reduce in
+    // Shelf.tsx): niente seed = niente pillola visibile, assert vacuamente vero.
+    if ((await page.locator(".shelf-seed").count()) > 0) {
+      await expect(page.locator(".shelf-seed")).toHaveCSS("opacity", "0");
+    }
     const shapes = await trace;
     expect(shapes.length).toBeGreaterThan(5);
     expect(shapes.every((s) => s.x > 0.35 || s.o < 0.1)).toBe(true);

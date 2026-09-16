@@ -88,9 +88,50 @@ export function extractPlaceholders(raw: string | null | undefined): string[] {
   return [...out];
 }
 
-export function normalizeShortcut(raw: string): string | null {
-  const t = raw.trim().toLowerCase();
+export function normalizeShortcut(raw: string): string | null {  const t = raw.trim().toLowerCase();
   if (!t) return null;
   const withSemi = t.startsWith(";") ? t : `;${t}`;
   return /^;[a-z0-9-_]{2,24}$/.test(withSemi) ? withSemi : null;
+}
+
+/** Riempie i segnaposto nominati ({{x}}, ${x}, [XXX]); %s/%d restano intatti. */
+export function fillTemplate(raw: string, values: Record<string, string>): { filled: string; missing: string[] } {
+  const missing: string[] = [];
+  const filled = raw
+    .replace(/\{\{([^}\n]{1,40})\}\}/g, (m, k) => {
+      const v = values[`{{${k}}}`] ?? values[k.trim()];
+      if (v == null || v === "") { if (!missing.includes(m)) missing.push(m); return m; }
+      return v;
+    })
+    .replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (m, k) => {
+      const v = values[m] ?? values[k];
+      if (v == null || v === "") { if (!missing.includes(m)) missing.push(m); return m; }
+      return v;
+    })
+    .replace(/\[([^\[\]\n]{1,30})\]/g, (m) => {
+      const v = values[m];
+      if (v == null || v === "") { if (!missing.includes(m)) missing.push(m); return m; }
+      return v;
+    });
+  return { filled, missing };
+}
+
+const TRACKING_PARAMS = /^(utm_[a-z]+|fbclid|gclid|gbraid|wbraid|msclkid|mc_cid|mc_eid|igshid|vero_id|yclid)$/i;
+
+/** Toglie i parametri di tracking da un URL (utm_*, fbclid, gclid…). Ritorna null se non è un URL. */
+export function stripTrackingParams(raw: string): string | null {
+  const t = raw.trim();
+  if (!/^https?:\/\//i.test(t)) return null;
+  try {
+    const u = new URL(t);
+    let changed = false;
+    for (const k of [...u.searchParams.keys()]) {
+      if (TRACKING_PARAMS.test(k)) { u.searchParams.delete(k); changed = true; }
+    }
+    if (!changed) return t;
+    // URL normalizza il resto: niente slash finali aggiunti oltre il dovuto
+    return u.toString();
+  } catch {
+    return null;
+  }
 }

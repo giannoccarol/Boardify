@@ -9,6 +9,7 @@ import { ActionGlyph } from "./ActionGlyph";
 import { ClipCard } from "./ClipCard";
 import { ClipPreview } from "./ClipPreview";
 import { CategoryPills } from "./CategoryPills";
+import { SpaceTabs } from "./SpaceTabs";
 import { ReminderDialog, ReminderDueBanner, ReminderStrip } from "./Reminders";
 import { groupClips, type Clip } from "../types";
 import { useShelfScroll } from "../useShelfScroll";
@@ -225,6 +226,7 @@ export function Shelf() {
 
         {s.settings.showCollections && (
           <div className="shelf-collections">
+            <SpaceTabs layoutId="shelf-space" />
             <CategoryPills
               layoutId="shelf-pill"
               categories={s.categories}

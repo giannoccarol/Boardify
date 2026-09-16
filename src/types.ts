@@ -34,6 +34,22 @@ export interface Category {
   count: number;
 }
 
+export interface Space {
+  id: string;
+  name: string;
+  icon: string;
+  query_json: string;
+  is_smart: boolean;
+  count: number;
+}
+
+export interface SmartSpaceQuery {
+  kind?: string;
+  category?: string;
+  search?: string;
+  favorites_only?: boolean;
+}
+
 export function timeAgo(iso: string, locale: Locale = "en"): string {
   try {
     const d = new Date(iso).getTime();

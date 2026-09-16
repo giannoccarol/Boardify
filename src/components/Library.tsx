@@ -7,6 +7,7 @@ import { useBoardify } from "../store";
 import { ClipCard } from "./ClipCard";
 import { Brand } from "./Brand";
 import { CategoryPills } from "./CategoryPills";
+import { SpaceTabs } from "./SpaceTabs";
 import { AppBadge } from "./AppBadge";
 import { byteSize, groupClips, imageDimensions, prettyApp, timeAgo } from "../types";
 import { formatCopy } from "../settings";
@@ -90,6 +91,7 @@ export function Library() {
         <div className="library-heading"><div><span className="eyebrow">{t("library.eyebrow")}</span><h1>{s.categoryFilter === "all" ? t("library.title") : s.categoryFilter}</h1><p>{t("library.subtitle")}</p></div><span className="library-count">{s.clips.length === 1 ? t("library.countOne") : t("library.count", { count: s.clips.length })}</span></div>
         {s.settings.showCollections && (
         <div className="library-collections">
+          <SpaceTabs layoutId="lib-space" />
           <CategoryPills
             layoutId="lib-pill"
             categories={s.categories}

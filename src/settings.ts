@@ -25,6 +25,8 @@ export interface Settings {
   aiEffort: AiEffort;
   aiKeys: Record<string, string>;
   aiBaseUrl: string;
+  autoPaste: boolean;
+  maxItems: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -49,6 +51,8 @@ export const DEFAULT_SETTINGS: Settings = {
   aiEffort: "medium",
   aiKeys: {},
   aiBaseUrl: "",
+  autoPaste: false,
+  maxItems: 0,
 };
 
 export const KIND_IDS = ["all", "text", "link", "code", "color", "image"] as const;

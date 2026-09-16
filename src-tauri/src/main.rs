@@ -5,6 +5,7 @@ mod clipboard;
 mod db;
 mod detect;
 mod icons;
+mod paste;
 #[cfg(target_os = "windows")]
 mod screen;
 mod source;
@@ -12,7 +13,7 @@ mod shelf_transition;
 mod watcher;
 
 use chrono::Utc;
-use db::{Category, ClipRow, Db};
+use db::{Category, ClipRow, Db, Space};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -41,6 +42,8 @@ pub struct WatchSettings {
     pub shortcuts_enabled: bool,
     pub notch_enabled: bool,
     pub shelf_shortcut: String,
+    pub auto_paste: bool,
+    pub max_items: i64,
 }
 
 impl Default for WatchSettings {
@@ -56,6 +59,9 @@ impl Default for WatchSettings {
             shortcuts_enabled: true,
             notch_enabled: true,
             shelf_shortcut: "Ctrl+Super+A".into(),
+            // Deroga AGENTS.md: iniezione tasti solo su scelta esplicita.
+            auto_paste: false,
+            max_items: 0,
         }
     }
 }
@@ -168,6 +174,32 @@ fn delete_clip(state: State<AppState>, app: tauri::AppHandle, id: String) -> Res
     Ok(())
 }
 
+/// Export JSON v1 negli appunti-nostrani: ritorna il JSON, il frontend decide dove metterlo.
+#[tauri::command]
+fn export_clips(state: State<AppState>) -> Result<String, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.export_json().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn import_clips(state: State<AppState>, app: tauri::AppHandle, json: String) -> Result<serde_json::Value, String> {
+    let (imported, skipped) = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.import_json(&json).map_err(|e| e.to_string())?
+    };
+    let _ = app.emit("clips-changed", ());
+    Ok(serde_json::json!({ "imported": imported, "skipped": skipped }))
+}
+
+/// Backup coerente (DB cifrato + immagini) in data_dir/backups, ritorna il percorso.
+#[tauri::command]
+fn backup_now(state: State<AppState>) -> Result<String, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.backup_now()
+        .map(|p| p.to_string_lossy().into_owned())
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn clear_history(state: State<AppState>, app: tauri::AppHandle) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
@@ -210,6 +242,13 @@ fn write_clip(app: &tauri::AppHandle, row: &ClipRow) -> Result<(), String> {
                 app.clipboard().write_image(&image).map_err(|e| e.to_string())?;
             }
             watcher::Snapshot::Text(text) => app.clipboard().write_text(text.clone()).map_err(|e| e.to_string())?,
+            watcher::Snapshot::Files(paths) => {
+                // text/uri-list su Linux, CF_HDROP su Windows — via arboard su entrambi.
+                let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+                cb.set()
+                    .file_list(paths)
+                    .map_err(|e| format!("Copia file non riuscita: {e}"))?;
+            }
         }
         // Suppress exactly our successful write, never the user's next clipboard.
         *last_hash = content.hash();
@@ -221,11 +260,29 @@ fn write_clip(app: &tauri::AppHandle, row: &ClipRow) -> Result<(), String> {
 
 #[tauri::command]
 async fn copy_clip(app: tauri::AppHandle, id: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let row = app.state::<AppState>().db.lock().map_err(|e| e.to_string())?
-            .get(&id).map_err(|e| e.to_string())?.ok_or("clip non trovata")?;
-        write_clip(&app, &row)
-    }).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking({
+        let app = app.clone();
+        move || {
+            let row = app.state::<AppState>().db.lock().map_err(|e| e.to_string())?
+                .get(&id).map_err(|e| e.to_string())?.ok_or("clip non trovata")?;
+            write_clip(&app, &row)
+        }
+    }).await.map_err(|e| e.to_string())??;
+    // Auto-paste opt-in: nascondi la UI, poi Ctrl+V sintetico in un thread a parte
+    // così la risposta del comando non aspetta i 180ms di focus.
+    let auto = app.state::<AppState>().watch.lock().map(|w| w.auto_paste).unwrap_or(false);
+    if auto {
+        hide_labeled(&app, "shelf");
+        hide_labeled(&app, "library");
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(180));
+            if let Err(e) = crate::paste::paste_ctrl_v() {
+                let _ = app.emit("paste-failed", e);
+            }
+        });
+    }
+    Ok(())
 }
 
 /// Scrive testo arbitrario (es. formati "Copia come") senza creare clip:
@@ -300,6 +357,61 @@ fn assign_category(state: State<AppState>, app: tauri::AppHandle, clip_id: Strin
 fn get_stats(state: State<AppState>) -> Result<serde_json::Value, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     db.stats().map_err(|e| e.to_string())
+}
+
+// ── Spaces: manuali (clip_spaces) + smart (query_json) ──
+
+#[tauri::command]
+fn get_spaces(state: State<AppState>) -> Result<Vec<Space>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.list_spaces().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn create_space(
+    state: State<AppState>,
+    app: tauri::AppHandle,
+    name: String,
+    icon: Option<String>,
+    query_json: Option<String>,
+    is_smart: Option<bool>,
+) -> Result<Space, String> {
+    let s = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.create_space(&name, icon.as_deref(), query_json.as_deref(), is_smart.unwrap_or(false))
+            .map_err(|e| e.to_string())?
+    };
+    let _ = app.emit("spaces-changed", ());
+    Ok(s)
+}
+
+#[tauri::command]
+fn delete_space(state: State<AppState>, app: tauri::AppHandle, id: String) -> Result<(), String> {
+    {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.delete_space(&id).map_err(|e| e.to_string())?;
+    }
+    let _ = app.emit("spaces-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn assign_space(state: State<AppState>, app: tauri::AppHandle, clip_id: String, space_id: String, assign: bool) -> Result<(), String> {
+    {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.assign_space(&clip_id, &space_id, assign).map_err(|e| e.to_string())?;
+    }
+    let _ = app.emit("spaces-changed", ());
+    let _ = app.emit("clips-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn get_space_clips(state: State<AppState>, space_id: String, limit: Option<i64>) -> Result<Vec<Clip>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.space_clips(&space_id, limit.unwrap_or(100))
+        .map(|rows| rows.into_iter().map(Clip::from).collect())
+        .map_err(|e| e.to_string())
 }
 
 /// Proxy HTTP per le API AI: la webview applica il CORS e alcuni provider
@@ -381,7 +493,7 @@ fn monitor_index_at_point(bounds: &[MonitorBounds], point: PhysicalPosition<f64>
     })
 }
 
-fn is_wayland_session() -> bool {
+pub(crate) fn is_wayland_session() -> bool {
     cfg!(target_os = "linux")
         && (std::env::var_os("WAYLAND_DISPLAY").is_some()
             || std::env::var("XDG_SESSION_TYPE")
@@ -871,6 +983,8 @@ fn apply_watch_settings(
     shortcuts_enabled: bool,
     notch_enabled: bool,
     shelf_shortcut: String,
+    auto_paste: bool,
+    max_items: i64,
 ) -> Result<(), String> {
     use std::str::FromStr;
     // Valida prima di toccare lo stato: stringa malformata = errore al frontend.
@@ -883,6 +997,8 @@ fn apply_watch_settings(
         w.auto_delete_days = auto_delete_days;
         w.shortcuts_enabled = shortcuts_enabled;
         w.notch_enabled = notch_enabled;
+        w.auto_paste = auto_paste;
+        w.max_items = max_items;
         std::mem::replace(&mut w.shelf_shortcut, new_sc.to_string())
     };
     if old != new_sc.to_string() {
@@ -896,6 +1012,11 @@ fn apply_watch_settings(
     if auto_delete_days > 0 {
         if let Ok(db) = state.db.lock() {
             let _ = db.prune_unused(auto_delete_days);
+        }
+    }
+    if max_items > 0 {
+        if let Ok(db) = state.db.lock() {
+            let _ = db.prune_by_count(max_items);
         }
     }
     Ok(())
@@ -1082,8 +1203,9 @@ fn main() {
             let toggle = MenuItem::with_id(app, "toggle", "Apri Shelf  (Ctrl+Super+A)", true, None::<&str>)?;
             let lib = MenuItem::with_id(app, "library", "Libreria  (Ctrl+Shift+L)", true, None::<&str>)?;
             let settings = MenuItem::with_id(app, "settings", "Impostazioni", true, None::<&str>)?;
+            let pause = MenuItem::with_id(app, "pause", "Pausa/Riprendi cattura", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Esci", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&toggle, &lib, &settings, &quit])?;
+            let menu = Menu::with_items(app, &[&toggle, &lib, &settings, &pause, &quit])?;
             let _ = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
@@ -1092,6 +1214,11 @@ fn main() {
                     "toggle" => toggle_window(app, "shelf"),
                     "library" => toggle_window(app, "library"),
                     "settings" => toggle_window(app, "settings"),
+                    "pause" => {
+                        if let Ok(mut w) = app.state::<AppState>().watch.lock() {
+                            w.auto_capture = !w.auto_capture;
+                        }
+                    }
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -1192,12 +1319,20 @@ fn main() {
             toggle_favorite,
             delete_clip,
             clear_history,
+            export_clips,
+            import_clips,
+            backup_now,
             copy_clip,
             copy_text,
             combine_clips,
             get_categories,
             create_category,
             assign_category,
+            get_spaces,
+            create_space,
+            delete_space,
+            assign_space,
+            get_space_clips,
             get_stats,
             ai_proxy,
             show_window,
