@@ -3,6 +3,8 @@ import ReactDOM from "react-dom/client";
 import { MotionConfig } from "framer-motion";
 import App from "./App";
 import { CopyError } from "./components/CopyError";
+import "@fontsource-variable/inter";
+import "@fontsource-variable/jetbrains-mono";
 import "./styles.css";
 
 const shot = new URLSearchParams(location.search).get("shot");

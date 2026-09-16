@@ -9,6 +9,7 @@ import { ActionGlyph } from "./ActionGlyph";
 import { ClipCard } from "./ClipCard";
 import { ClipPreview } from "./ClipPreview";
 import { CategoryPills } from "./CategoryPills";
+import { ReminderDialog, ReminderDueBanner, ReminderStrip } from "./Reminders";
 import { groupClips, type Clip } from "../types";
 import { useShelfScroll } from "../useShelfScroll";
 import { KIND_IDS } from "../settings";
@@ -83,6 +84,7 @@ export function Shelf() {
 
   useEffect(() => {
     s.refresh();
+    s.loadReminders();
     const t = setTimeout(() => inputRef.current?.focus(), 50);
     const onKey = (e: KeyboardEvent) => {
       if (closeTask.current) return;
@@ -127,6 +129,7 @@ export function Shelf() {
       ? Promise.all([listen("window-shown", () => {
           setTick((n) => n + 1);
           live.current.refresh();
+          live.current.loadReminders();
           live.current.setPreview(null);
           setTimeout(() => inputRef.current?.focus(), 40);
         }), listen<number>("shelf-close-requested", ({ payload }) => {
@@ -248,6 +251,8 @@ export function Shelf() {
         )}
 
         <div className="shelf-content" data-tauri-drag-region="false">
+          <ReminderDueBanner />
+          <ReminderStrip />
           {s.clips.length === 0 ? (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="py-9 text-center">
               <p className="text-[15px] font-semibold tracking-tight">{t("shelf.emptyTitle")}</p>
@@ -325,6 +330,7 @@ export function Shelf() {
             </motion.div>
           )}
         </AnimatePresence>
+        <ReminderDialog />
       </motion.div>
 
       <div className="pointer-events-auto">

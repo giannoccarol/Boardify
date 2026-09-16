@@ -13,6 +13,22 @@ const demoFav = new Map<string, boolean>();
 const demoPin = new Map<string, boolean>();
 const demoDeleted = new Set<string>();
 const demoNotes: Clip[] = [];
+const demoReminders = new Map<string, string>();
+
+function loadDemoReminders() {
+  try {
+    const raw = localStorage.getItem("boardify-reminders");
+    if (!raw) return;
+    const obj = JSON.parse(raw) as Record<string, string>;
+    for (const [k, v] of Object.entries(obj)) demoReminders.set(k, v);
+  } catch { /* defaults */ }
+}
+function saveDemoReminders() {
+  try {
+    localStorage.setItem("boardify-reminders", JSON.stringify(Object.fromEntries(demoReminders)));
+  } catch { /* ignore */ }
+}
+loadDemoReminders();
 
 function demoClips(): Clip[] {
   return [
@@ -21,8 +37,16 @@ function demoClips(): Clip[] {
       ...c,
       is_favorite: demoFav.get(c.id) ?? c.is_favorite,
       is_pinned: demoPin.get(c.id) ?? c.is_pinned,
+      remind_at: demoReminders.get(c.id) ?? (c as Clip).remind_at ?? null,
     })),
   ];
+}
+
+function demoReminderClips(): Clip[] {
+  return demoClips()
+    .filter((c) => c.remind_at)
+    .sort((a, b) => String(a.remind_at).localeCompare(String(b.remind_at)))
+    .slice(0, 50);
 }
 
 type View = "shelf" | "library" | "capture" | "settings";
@@ -31,6 +55,7 @@ interface BoardifyState {
   view: View;
   clips: Clip[];
   categories: Category[];
+  reminders: Clip[];
   query: string;
   kindFilter: string;
   categoryFilter: string;
@@ -44,6 +69,8 @@ interface BoardifyState {
   previewId: string | null;
   noteOpen: boolean;
   copyError: string | null;
+  reminderDialogId: string | null;
+  reminderDueId: string | null;
 
   setView: (v: View) => void;
   setQuery: (q: string) => void;
@@ -54,17 +81,23 @@ interface BoardifyState {
   select: (id: string | null) => void;
   setPreview: (id: string | null) => void;
   setNoteOpen: (b: boolean) => void;
+  setReminderDialog: (id: string | null) => void;
+  setReminderDue: (id: string | null) => void;
   toggleMulti: (id: string) => void;
   clearMulti: () => void;
   patchSettings: (p: Partial<Settings>) => void;
   loadSettings: () => Promise<void>;
 
   refresh: () => Promise<void>;
+  loadReminders: () => Promise<void>;
   search: () => Promise<void>;
   copyClip: (id: string, hide?: boolean) => Promise<boolean>;
   copyText: (text: string) => Promise<boolean>;
   toggleFav: (id: string) => Promise<void>;
   togglePin: (id: string) => Promise<void>;
+  setReminder: (id: string, remindAtIso: string) => Promise<void>;
+  clearReminder: (id: string) => Promise<void>;
+  snoozeReminder: (id: string, minutes?: number) => Promise<void>;
   setShortcut: (id: string, shortcut: string | null) => Promise<void>;
   editClip: (id: string, text: string) => Promise<void>;
   deleteClip: (id: string) => Promise<void>;
@@ -148,6 +181,7 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
   })(),
   clips: [],
   categories: [],
+  reminders: [],
   query: "",
   kindFilter: "all",
   categoryFilter: "all",
@@ -161,6 +195,8 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
   previewId: null,
   noteOpen: false,
   copyError: null,
+  reminderDialogId: null,
+  reminderDueId: null,
 
   setView: (view) => set({ view }),
   setQuery: (query) => {
@@ -187,6 +223,8 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
   select: (selectedId) => set({ selectedId }),
   setPreview: (previewId) => set({ previewId }),
   setNoteOpen: (noteOpen) => set({ noteOpen }),
+  setReminderDialog: (reminderDialogId) => set({ reminderDialogId }),
+  setReminderDue: (reminderDueId) => set({ reminderDueId }),
   toggleMulti: (id) =>
     set((s) => ({
       multiSelect: s.multiSelect.includes(id)
@@ -226,6 +264,7 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
       set((s) => ({
         clips,
         categories: DEMO_CATEGORIES,
+        reminders: demoReminderClips(),
         selectedId: s.selectedId && clips.some((c) => c.id === s.selectedId) ? s.selectedId : clips[0]?.id ?? null,
         loading: false,
       }));
@@ -341,6 +380,76 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
       clips: s.clips.map((c) => (c.id === id ? { ...c, is_pinned: pin } : c)),
     }));
   },
+  loadReminders: async () => {
+    if (!isTauri()) {
+      set({ reminders: demoReminderClips() });
+      return;
+    }
+    try {
+      const reminders = await invoke<Clip[]>("get_reminders");
+      set({ reminders });
+      // Allinea il badge campanella sulle card senza rifare get_clips.
+      const byId = new Map(reminders.map((r) => [r.id, r.remind_at ?? null]));
+      set((s) => ({
+        clips: s.clips.map((c) =>
+          byId.has(c.id) || c.remind_at ? { ...c, remind_at: byId.get(c.id) ?? null } : c
+        ),
+      }));
+    } catch { /* best-effort */ }
+  },
+  setReminder: async (id, remindAtIso) => {
+    if (!isTauri()) {
+      demoReminders.set(id, remindAtIso);
+      saveDemoReminders();
+      set((s) => ({
+        clips: s.clips.map((c) => (c.id === id ? { ...c, remind_at: remindAtIso } : c)),
+        reminders: demoReminderClips(),
+        reminderDialogId: null,
+      }));
+      return;
+    }
+    const updated = await invoke<Clip>("set_reminder", { clipId: id, remindAt: remindAtIso });
+    set((s) => ({
+      clips: s.clips.map((c) => (c.id === id ? updated : c)),
+      reminderDialogId: null,
+    }));
+    await get().loadReminders();
+  },
+  clearReminder: async (id) => {
+    if (!isTauri()) {
+      demoReminders.delete(id);
+      saveDemoReminders();
+      set((s) => ({
+        clips: s.clips.map((c) => (c.id === id ? { ...c, remind_at: null } : c)),
+        reminders: demoReminderClips(),
+      }));
+      return;
+    }
+    await invoke("clear_reminder", { clipId: id });
+    set((s) => ({
+      clips: s.clips.map((c) => (c.id === id ? { ...c, remind_at: null } : c)),
+    }));
+    await get().loadReminders();
+  },
+  snoozeReminder: async (id, minutes = 30) => {
+    if (!isTauri()) {
+      const when = new Date(Date.now() + minutes * 60_000).toISOString();
+      demoReminders.set(id, when);
+      saveDemoReminders();
+      set((s) => ({
+        clips: s.clips.map((c) => (c.id === id ? { ...c, remind_at: when } : c)),
+        reminders: demoReminderClips(),
+        reminderDueId: null,
+      }));
+      return;
+    }
+    const updated = await invoke<Clip>("snooze_reminder", { clipId: id, minutes });
+    set((s) => ({
+      clips: s.clips.map((c) => (c.id === id ? updated : c)),
+      reminderDueId: null,
+    }));
+    await get().loadReminders();
+  },
   setShortcut: async (id, shortcut) => {
     const norm = shortcut?.trim().toLowerCase() || null;
     const value = norm ? (norm.startsWith(";") ? norm : `;${norm}`) : null;
@@ -365,9 +474,14 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
   },
   deleteClip: async (id) => {
     if (isTauri()) await invoke("delete_clip", { id });
-    else demoDeleted.add(id);
+    else {
+      demoDeleted.add(id);
+      demoReminders.delete(id);
+      saveDemoReminders();
+    }
     set((s) => ({
       clips: s.clips.filter((c) => c.id !== id),
+      reminders: s.reminders.filter((c) => c.id !== id),
       selectedId: s.selectedId === id ? s.clips[0]?.id ?? null : s.selectedId,
     }));
   },
@@ -492,8 +606,16 @@ export function initRealtime() {
     if (query.trim()) useBoardify.getState().search();
     else useBoardify.getState().refresh();
   });
+  listen("reminders-changed", () => {
+    useBoardify.getState().loadReminders();
+  });
+  listen<Clip>("reminder-due", ({ payload }) => {
+    useBoardify.setState({ reminderDueId: payload.id });
+    useBoardify.getState().loadReminders();
+  });
   listen("window-shown", () => {
     useBoardify.getState().refresh();
+    useBoardify.getState().loadReminders();
   });
   listen("open-note", () => {
     useBoardify.getState().setNoteOpen(true);

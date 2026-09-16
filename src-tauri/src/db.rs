@@ -25,6 +25,8 @@ pub struct ClipRow {
     pub created_at: String,
     pub is_pinned: bool,
     pub inline_shortcut: Option<String>,
+    #[serde(default)]
+    pub remind_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +118,13 @@ impl Db {
                 is_pinned INTEGER NOT NULL DEFAULT 0,
                 inline_shortcut TEXT
             );
+            CREATE TABLE IF NOT EXISTS reminders (
+                clip_id TEXT PRIMARY KEY,
+                remind_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                notified INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(remind_at);
             CREATE TRIGGER IF NOT EXISTS clips_au AFTER UPDATE ON clips BEGIN
                 INSERT INTO clips_fts(clips_fts, rowid, text, ocr_text, source_app, window_title)
                 VALUES ('delete', old.rowid, old.text, old.ocr_text, old.source_app, old.window_title);
@@ -210,6 +219,7 @@ impl Db {
             created_at: row.get(13)?,
             is_pinned: false,
             inline_shortcut: None,
+            remind_at: None,
         })
     }
 
@@ -232,6 +242,13 @@ impl Db {
                         r.inline_shortcut = row.get(1).ok();
                     }
                 }
+            }
+            if let Ok(remind) = self.conn.query_row(
+                "SELECT remind_at FROM reminders WHERE clip_id=?1",
+                params![r.id],
+                |row| row.get::<_, String>(0),
+            ) {
+                r.remind_at = Some(remind);
             }
         }
         Ok(rows)
@@ -422,12 +439,14 @@ impl Db {
         }
         self.conn.execute("DELETE FROM clip_categories WHERE clip_id=?1", params![id])?;
         self.conn.execute("DELETE FROM clip_flags WHERE clip_id=?1", params![id])?;
+        self.conn.execute("DELETE FROM reminders WHERE clip_id=?1", params![id])?;
         self.conn.execute("DELETE FROM clips WHERE id=?1", params![id])?;
         Ok(())
     }
 
     pub fn clear(&self) -> SqlResult<()> {
         self.conn.execute("DELETE FROM clip_categories", [])?;
+        self.conn.execute("DELETE FROM reminders", [])?;
         self.conn.execute("DELETE FROM clips", [])?;
         let _ = std::fs::remove_dir_all(images_dir());
         let _ = std::fs::create_dir_all(images_dir());
@@ -544,6 +563,90 @@ impl Db {
         Ok(())
     }
 
+    fn parse_remind_at(raw: &str) -> SqlResult<String> {
+        let dt = chrono::DateTime::parse_from_rfc3339(raw.trim())
+            .map_err(|_| rusqlite::Error::InvalidParameterName("data non valida".into()))?;
+        Ok(dt.with_timezone(&Utc).to_rfc3339())
+    }
+
+    pub fn set_reminder(&self, clip_id: &str, remind_at: &str) -> SqlResult<ClipRow> {
+        let when = Self::parse_remind_at(remind_at)?;
+        let exists: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM clips WHERE id=?1",
+            params![clip_id],
+            |r| r.get(0),
+        )?;
+        if exists == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO reminders (clip_id, remind_at, created_at, notified)
+             VALUES (?1, ?2, ?3, 0)
+             ON CONFLICT(clip_id) DO UPDATE SET remind_at=excluded.remind_at, notified=0",
+            params![clip_id, when, now],
+        )?;
+        self.get(clip_id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
+    }
+
+    pub fn clear_reminder(&self, clip_id: &str) -> SqlResult<()> {
+        self.conn.execute("DELETE FROM reminders WHERE clip_id=?1", params![clip_id])?;
+        Ok(())
+    }
+
+    pub fn snooze_reminder(&self, clip_id: &str, minutes: i64) -> SqlResult<ClipRow> {
+        let mins = minutes.clamp(5, 60 * 24 * 7);
+        let when = (Utc::now() + chrono::Duration::minutes(mins)).to_rfc3339();
+        let exists: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM reminders WHERE clip_id=?1",
+            params![clip_id],
+            |r| r.get(0),
+        )?;
+        if exists == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        self.conn.execute(
+            "UPDATE reminders SET remind_at=?1, notified=0 WHERE clip_id=?2",
+            params![when, clip_id],
+        )?;
+        self.get(clip_id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
+    }
+
+    pub fn list_reminders(&self) -> SqlResult<Vec<ClipRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT c.id,c.kind,c.text,c.image_path,c.color_hex,c.file_paths_json,c.source_app,c.window_title,c.hash,c.is_favorite,c.is_sensitive,c.ocr_text,c.copy_count,c.created_at
+             FROM clips c JOIN reminders r ON r.clip_id=c.id ORDER BY r.remind_at ASC LIMIT 50",
+        )?;
+        let rows: Vec<ClipRow> = stmt
+            .query_map([], Self::row_map)?
+            .filter_map(|x| x.ok())
+            .collect();
+        self.with_categories(rows)
+    }
+
+    /// Clip scaduti non ancora notificati (remind_at <= now). Il chiamante
+    /// notifica e poi chiama `mark_notified` così ogni scadenza suona una volta sola.
+    pub fn due_reminders(&self, now_rfc3339: &str) -> SqlResult<Vec<ClipRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT c.id,c.kind,c.text,c.image_path,c.color_hex,c.file_paths_json,c.source_app,c.window_title,c.hash,c.is_favorite,c.is_sensitive,c.ocr_text,c.copy_count,c.created_at
+             FROM clips c JOIN reminders r ON r.clip_id=c.id
+             WHERE r.remind_at <= ?1 AND r.notified=0 ORDER BY r.remind_at ASC LIMIT 10",
+        )?;
+        let rows: Vec<ClipRow> = stmt
+            .query_map(params![now_rfc3339], Self::row_map)?
+            .filter_map(|x| x.ok())
+            .collect();
+        self.with_categories(rows)
+    }
+
+    pub fn mark_notified(&self, clip_id: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "UPDATE reminders SET notified=1 WHERE clip_id=?1",
+            params![clip_id],
+        )?;
+        Ok(())
+    }
+
     pub fn update_text(&self, id: &str, new_text: &str) -> SqlResult<ClipRow> {
         let t = new_text.trim();
         if t.is_empty() || t.chars().count() > 100_000 {
@@ -628,9 +731,14 @@ impl Db {
         let cutoff = (Utc::now() - chrono::Duration::days(days)).to_rfc3339();
         let n = self.conn.execute(
             "DELETE FROM clips WHERE created_at < ?1 AND is_favorite=0
-             AND id NOT IN (SELECT clip_id FROM clip_flags WHERE is_pinned=1)",
+             AND id NOT IN (SELECT clip_id FROM clip_flags WHERE is_pinned=1)
+             AND id NOT IN (SELECT clip_id FROM reminders)",
             params![cutoff],
         )?;
+        let _ = self.conn.execute(
+            "DELETE FROM reminders WHERE clip_id NOT IN (SELECT id FROM clips)",
+            [],
+        );
         Ok(n)
     }
 }
@@ -653,5 +761,42 @@ mod tests {
         assert_eq!(again.categories_json, first.categories_json);
         let (unknown, _) = db.insert_text("text", "Fixture", "Unknown", "", "same", false, None, None).unwrap();
         assert_eq!(unknown.source_app, "google-chrome");
+    }
+
+    #[test]
+    fn reminders_roundtrip_due_and_snooze() {
+        let db = Db::in_memory().unwrap();
+        let (clip, _) = db.insert_text("text", "Paga bolletta", "firefox", "", "rem1", false, None, None).unwrap();
+        // data non valida
+        assert!(db.set_reminder(&clip.id, "non-una-data").is_err());
+        // clip inesistente
+        assert!(db.set_reminder("missing", &Utc::now().to_rfc3339()).is_err());
+        let past = (Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
+        let row = db.set_reminder(&clip.id, &past).unwrap();
+        assert_eq!(row.remind_at.as_deref(), Some(past.as_str()));
+        let due = db.due_reminders(&Utc::now().to_rfc3339()).unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].id, clip.id);
+        db.mark_notified(&clip.id).unwrap();
+        assert!(db.due_reminders(&Utc::now().to_rfc3339()).unwrap().is_empty());
+        // lo stesso clip resta in lista finché non viene cancellato il reminder
+        assert_eq!(db.list_reminders().unwrap().len(), 1);
+        let snoozed = db.snooze_reminder(&clip.id, 30).unwrap();
+        assert!(snoozed.remind_at.is_some());
+        // di nuovo due dopo lo snooze? no, è nel futuro
+        assert!(db.due_reminders(&Utc::now().to_rfc3339()).unwrap().is_empty());
+        db.clear_reminder(&clip.id).unwrap();
+        assert!(db.list_reminders().unwrap().is_empty());
+        assert!(db.get(&clip.id).unwrap().unwrap().remind_at.is_none());
+    }
+
+    #[test]
+    fn deleting_clip_clears_its_reminder() {
+        let db = Db::in_memory().unwrap();
+        let (clip, _) = db.insert_text("text", "Da ricordare", "firefox", "", "rem2", false, None, None).unwrap();
+        let future = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        db.set_reminder(&clip.id, &future).unwrap();
+        db.delete(&clip.id).unwrap();
+        assert!(db.list_reminders().unwrap().is_empty());
     }
 }

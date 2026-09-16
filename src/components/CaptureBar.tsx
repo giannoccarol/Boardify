@@ -15,6 +15,8 @@ export function CaptureBar() {
   const clips = useBoardify((s) => s.clips);
   const toggleFav = useBoardify((s) => s.toggleFav);
   const refresh = useBoardify((s) => s.refresh);
+  const setReminder = useBoardify((s) => s.setReminder);
+  const clearReminder = useBoardify((s) => s.clearReminder);
   const [clip, setClip] = useState<Clip | null>(null);
   const { t } = useT();
 
@@ -51,8 +53,16 @@ export function CaptureBar() {
       )}
       <AppBadge name={clip.source_app} icon={clip.source_icon} size={22} />
       <p className="flex-1 min-w-0 truncate text-[13px] font-medium">{cardTitle(clip)}</p>
-      <div className="flex items-center gap-0.5">
-        <Mini icon={<Bell className="w-3.5 h-3.5" />} title={t("capture.reminder")} />
+      <div className="flex items-center gap-0.5 pointer-events-auto">
+        <Mini
+          icon={<Bell className={`w-3.5 h-3.5 ${clip.remind_at ? "fill-current" : ""}`} />}
+          title={clip.remind_at ? t("card.reminderActive") : t("card.reminder")}
+          active={!!clip.remind_at}
+          onClick={() => {
+            if (clip.remind_at) clearReminder(clip.id);
+            else setReminder(clip.id, new Date(Date.now() + 60 * 60_000).toISOString());
+          }}
+        />
         <Mini icon={<Folder className="w-3.5 h-3.5" />} title={t("capture.categories")} />
         <Mini
           icon={<Star className={`w-3.5 h-3.5 ${clip.is_favorite ? "fill-current" : ""}`} />}

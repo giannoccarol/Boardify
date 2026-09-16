@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Pin, Copy, Star, Trash2, ShieldAlert, Code2, Link2, Play, Check } from "lucide-react";
+import { Pin, Copy, Star, Trash2, ShieldAlert, Code2, Link2, Play, Check, Bell } from "lucide-react";
 import { useClipImageSrc } from "../clipImage";
 import type { Clip } from "../types";
 import { cardTitle, kindLabel, prettyApp, timeAgo } from "../types";
@@ -36,6 +36,8 @@ export const ClipCard = memo(function ClipCard({ clip, selected, index, variant 
   const toggleMulti = useBoardify((s) => s.toggleMulti);
   const activateClip = useBoardify((s) => s.activateClip);
   const setPreview = useBoardify((s) => s.setPreview);
+  const setReminderDialog = useBoardify((s) => s.setReminderDialog);
+  const clearReminder = useBoardify((s) => s.clearReminder);
   const clipSize = useBoardify((s) => s.settings.clipSize);
   const clickAction = useBoardify((s) => s.settings.clickAction);
   const isMulti = useBoardify((s) => s.multiSelect.includes(clip.id));
@@ -176,6 +178,11 @@ export const ClipCard = memo(function ClipCard({ clip, selected, index, variant 
           <HoverBtn title={copied ? t("card.copied") : t("action.copy")} active={copied} sequence={copySequence} onClick={async () => { if (await copyClip(clip.id)) flashCopied(); }}>{copied ? <Check size={13} /> : <Copy size={13} />}</HoverBtn>
           <HoverBtn title={t("action.delete")} onClick={() => deleteClip(clip.id)}><Trash2 size={13} /></HoverBtn>
           <HoverBtn title={t("action.favorite")} active={clip.is_favorite} onClick={() => toggleFav(clip.id)}><Star size={13} className={clip.is_favorite ? "fill-current" : ""} /></HoverBtn>
+          <HoverBtn
+            title={clip.remind_at ? t("card.reminderActive") : t("card.reminder")}
+            active={!!clip.remind_at}
+            onClick={() => { if (clip.remind_at) clearReminder(clip.id); else setReminderDialog(clip.id); }}
+          ><Bell size={13} className={clip.remind_at ? "fill-current" : ""} /></HoverBtn>
             </motion.div>
           )}
         </AnimatePresence>
@@ -207,6 +214,7 @@ function clipCardEqual(p: Props, n: Props): boolean {
     a.source_icon === b.source_icon &&
     a.is_favorite === b.is_favorite &&
     a.is_pinned === b.is_pinned &&
+    a.remind_at === b.remind_at &&
     a.created_at === b.created_at
   );
 }

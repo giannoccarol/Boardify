@@ -83,6 +83,8 @@ pub struct Clip {
     pub created_at: String,
     pub is_pinned: bool,
     pub inline_shortcut: Option<String>,
+    #[serde(default)]
+    pub remind_at: Option<String>,
 }
 
 impl From<ClipRow> for Clip {
@@ -113,6 +115,7 @@ impl From<ClipRow> for Clip {
             created_at: r.created_at,
             is_pinned: r.is_pinned,
             inline_shortcut: r.inline_shortcut,
+            remind_at: r.remind_at,
         }
     }
 }
@@ -161,6 +164,7 @@ fn delete_clip(state: State<AppState>, app: tauri::AppHandle, id: String) -> Res
         db.delete(&id).map_err(|e| e.to_string())?;
     }
     let _ = app.emit("clips-changed", ());
+    let _ = app.emit("reminders-changed", ());
     Ok(())
 }
 
@@ -169,6 +173,7 @@ fn clear_history(state: State<AppState>, app: tauri::AppHandle) -> Result<(), St
     let db = state.db.lock().map_err(|e| e.to_string())?;
     db.clear().map_err(|e| e.to_string())?;
     let _ = app.emit("clips-changed", ());
+    let _ = app.emit("reminders-changed", ());
     Ok(())
 }
 
@@ -709,6 +714,88 @@ fn toggle_pin(state: State<AppState>, id: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
+fn get_reminders(state: State<AppState>) -> Result<Vec<Clip>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.list_reminders()
+        .map(|rows| rows.into_iter().map(Clip::from).collect())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_reminder(state: State<AppState>, app: tauri::AppHandle, clip_id: String, remind_at: String) -> Result<Clip, String> {
+    let row = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.set_reminder(&clip_id, &remind_at).map_err(|e| e.to_string())?
+    };
+    let _ = app.emit("reminders-changed", ());
+    let _ = app.emit("clips-changed", ());
+    Ok(row.into())
+}
+
+#[tauri::command]
+fn clear_reminder(state: State<AppState>, app: tauri::AppHandle, clip_id: String) -> Result<(), String> {
+    {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.clear_reminder(&clip_id).map_err(|e| e.to_string())?;
+    }
+    let _ = app.emit("reminders-changed", ());
+    let _ = app.emit("clips-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn snooze_reminder(state: State<AppState>, app: tauri::AppHandle, clip_id: String, minutes: Option<i64>) -> Result<Clip, String> {
+    let row = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.snooze_reminder(&clip_id, minutes.unwrap_or(30)).map_err(|e| e.to_string())?
+    };
+    let _ = app.emit("reminders-changed", ());
+    let _ = app.emit("clips-changed", ());
+    Ok(row.into())
+}
+
+/// Loop reminder: ogni 15s cerca gli scaduti, manda la notifica OS una volta
+/// sola e avvisa la UI. Niente focus rubato, niente paste-injection:
+/// l'utente riapre la shelf e copia con Ctrl+V come sempre.
+fn run_reminder_loop(app: tauri::AppHandle) {
+    use tauri_plugin_notification::NotificationExt;
+    loop {
+        std::thread::sleep(Duration::from_secs(15));
+        let due: Vec<Clip> = app
+            .state::<AppState>()
+            .db
+            .lock()
+            .ok()
+            .and_then(|db| db.due_reminders(&Utc::now().to_rfc3339()).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(Clip::from)
+            .collect();
+        for clip in due {
+            let body: String = clip
+                .text
+                .as_deref()
+                .unwrap_or(clip.preview.as_str())
+                .chars()
+                .take(140)
+                .collect();
+            let _ = app
+                .notification()
+                .builder()
+                .title("Boardify · Promemoria")
+                .body(body.trim())
+                .show();
+            if let Ok(db) = app.state::<AppState>().db.lock() {
+                let _ = db.mark_notified(&clip.id);
+            }
+            let _ = app.emit("reminder-due", &clip);
+            let _ = app.emit("reminders-changed", ());
+            let _ = app.emit("clips-changed", ());
+        }
+    }
+}
+
+#[tauri::command]
 fn set_inline_shortcut(state: State<AppState>, id: String, shortcut: Option<String>) -> Result<(), String> {
     let norm = shortcut
         .as_deref()
@@ -1083,6 +1170,8 @@ fn main() {
             // Watcher clipboard in background
             let app_handle = app.handle().clone();
             std::thread::spawn(move || watcher::run_loop(app_handle));
+            let remind_handle = app.handle().clone();
+            std::thread::spawn(move || run_reminder_loop(remind_handle));
 
             if let Some(w) = app.get_webview_window("shelf") {
                 fill_monitor(&w);
@@ -1115,6 +1204,10 @@ fn main() {
             hide_window,
             finish_shelf_close,
             toggle_pin,
+            get_reminders,
+            set_reminder,
+            clear_reminder,
+            snooze_reminder,
             set_inline_shortcut,
             edit_clip,
             insert_note,

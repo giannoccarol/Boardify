@@ -24,6 +24,7 @@ export interface Clip {
   created_at: string;
   is_pinned?: boolean;
   inline_shortcut?: string | null;
+  remind_at?: string | null;
 }
 
 export interface Category {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Check, ChevronDown, Copy, ExternalLink, Link2, X, Pin, Star, QrCode, Mail, Phone, MapPin, FolderOpen, Image as ImageIcon, FileText, Code2, Palette, Clock3, Hash, Sparkles } from "lucide-react";
+import { Check, ChevronDown, Copy, ExternalLink, Link2, X, Pin, Star, QrCode, Mail, Phone, MapPin, FolderOpen, Image as ImageIcon, FileText, Code2, Palette, Clock3, Hash, Sparkles, Bell } from "lucide-react";
 import { useClipImageSrc } from "../clipImage";
 import type { Clip } from "../types";
 import { byteSize, imageDimensions, prettyApp, timeAgo } from "../types";
@@ -357,6 +357,9 @@ export function ClipPreview({ clip }: { clip: Clip }) {
               )}
             </AnimatePresence>
           </div>
+          <Tool title={clip.remind_at ? t("card.reminderActive") : t("card.reminder")} active={!!clip.remind_at} onClick={() => { if (clip.remind_at) s.clearReminder(clip.id); else s.setReminderDialog(clip.id); }}>
+            <Bell className={`w-3.5 h-3.5 ${clip.remind_at ? "fill-current" : ""}`} />
+          </Tool>
           <Tool title={t("action.pin")} active={!!clip.is_pinned} onClick={() => s.togglePin(clip.id)}>
             <Pin className={`w-3.5 h-3.5 ${clip.is_pinned ? "fill-current" : ""}`} />
           </Tool>
