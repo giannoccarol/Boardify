@@ -58,6 +58,36 @@ test.describe("shelf interactions", () => {
     expect(errors).toEqual([]);
   });
 
+  test("frecce con preview aperta trascinano la preview", async ({ page }) => {
+    const errors = watchConsole(page);
+    await gotoView(page, "shelf", true);
+    await expect(cards(page).first()).toBeVisible();
+    // Card centrale di testo (niente metadati async da link): riferimento stabile.
+    await cards(page).nth(1).click();
+    const preview = page.locator(".clip-preview");
+    await expect(preview).toBeVisible();
+    const middle = await preview.innerText();
+    // La search ha l'autofocus: le frecce la ignorano, serve blur.
+    await page.locator(".shelf-search input").evaluate((el) => (el as HTMLElement).blur());
+    const ms = await measureUntil(
+      () => page.keyboard.press("ArrowRight"),
+      async () => {
+        await expect(cards(page).nth(2)).toHaveAttribute("data-selected", "true");
+        await expect.poll(async () => preview.innerText()).not.toBe(middle);
+      },
+    );
+    expectBudget(ms, BUDGET.navMs, "arrow nav with preview");
+    const back = await measureUntil(
+      () => page.keyboard.press("ArrowLeft"),
+      async () => {
+        await expect(cards(page).nth(1)).toHaveAttribute("data-selected", "true");
+        await expect.poll(async () => preview.innerText()).toBe(middle);
+      },
+    );
+    expectBudget(back, BUDGET.navMs, "arrow nav back with preview");
+    expect(errors).toEqual([]);
+  });
+
   test("menu contestuale hover + pin", async ({ page }) => {
     const errors = watchConsole(page);
     await gotoView(page, "shelf", true);
@@ -101,7 +131,7 @@ test.describe("shelf interactions", () => {
     expect(errors).toEqual([]);
   });
 
-  test("copia come: opzioni per tipo nella preview", async ({ page }) => {
+  test("copia come: opzioni per tipo nel menu dello split-button", async ({ page }) => {
     const errors = watchConsole(page);
     await gotoView(page, "shelf");
     // Filtra lo snippet demo (@code → kind code) per una preview deterministica.
@@ -117,13 +147,14 @@ test.describe("shelf interactions", () => {
       () => expect(preview).toBeVisible(),
     );
     expectBudget(openMs, BUDGET.previewOpenMs, "copy-as preview open");
-    await expect(preview.getByText("Copy as")).toBeVisible();
+    await preview.getByRole("button", { name: "Copy as", exact: true }).click();
+    await expect(preview.locator(".copy-menu")).toBeVisible();
     // Lo snippet demo è già formattato: "Formatted" appare solo se c'è
     // qualcosa da normalizzare (dedent/trailing space).
     for (const name of ["Original", "MD block", "One line"]) {
-      await expect(preview.getByRole("button", { name })).toBeVisible();
+      await expect(preview.locator(".copy-menu-label", { hasText: name })).toBeVisible();
     }
-    await expect(preview.getByRole("button", { name: "Formatted" })).toHaveCount(0);
+    await expect(preview.locator(".copy-menu-label", { hasText: "Formatted" })).toHaveCount(0);
     expect(errors).toEqual([]);
   });
 });

@@ -352,6 +352,16 @@ kbd { font-family: inherit; font-size: 10px; border-radius: 5px; border: 1px sol
 .clip-card:hover::after, .clip-card:focus-visible::after { border: 2px solid #ffffff90; }
 .clip-card[data-selected="true"]::after, .clip-card[data-multi="true"]::after { border: 2px solid #f5f5f5; }
 .clip-card:focus-visible { outline: none; }
+.clip-card[data-exportable="true"] { cursor: grab; }
+.clip-card[data-dragging="true"] {
+  cursor: grabbing;
+  opacity: .64;
+  transform: translate3d(0, -3px, 0) scale(.965);
+  transition: transform 140ms cubic-bezier(.2,.8,.2,1), opacity 110ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .clip-card[data-dragging="true"] { transition: none; }
+}
 .clip-actions { position: absolute; top: 6px; right: 6px; z-index: 30; display: flex; align-items: center; gap: 4px; }
 .clip-action-button { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; color: #e2e2e2; background: #101010e8; }
 .clip-action-button.is-active { background: #f4f4f4; color: #171717; }

@@ -81,6 +81,16 @@ interface BoardifyState {
 let debounce: ReturnType<typeof setTimeout> | null = null;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
+/** Migrazioni una tantum: chi aveva il vecchio default eredita quello nuovo. */
+const SHORTCUT_MIGRATIONS: Record<string, string> = {
+  "Ctrl+Super+V": "Ctrl+Super+A",
+};
+
+function migrateSettings(s: Settings): Settings {
+  const next = SHORTCUT_MIGRATIONS[s.shelfShortcut];
+  return next ? { ...s, shelfShortcut: next } : s;
+}
+
 async function persistSettings(s: Settings) {
   if (!isTauri()) {
     localStorage.setItem("boardify-settings", JSON.stringify(s));
@@ -194,14 +204,14 @@ export const useBoardify = create<BoardifyState>((set, get) => ({
     try {
       if (!isTauri()) {
         const raw = localStorage.getItem("boardify-settings");
-        if (raw) set({ settings: { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } });
+        if (raw) set({ settings: migrateSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(raw) }) });
         return;
       }
       const { LazyStore } = await import("@tauri-apps/plugin-store");
       const st = new LazyStore("settings.json");
       const saved = await st.get<Settings>("boardify");
       if (saved) {
-        const settings = { ...DEFAULT_SETTINGS, ...saved };
+        const settings = migrateSettings({ ...DEFAULT_SETTINGS, ...saved });
         set({ settings });
         await persistSettings(settings);
       }

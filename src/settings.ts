@@ -41,7 +41,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoDeleteDays: 0,
   ignoredApps: "",
   shortcutsEnabled: true,
-  shelfShortcut: "Ctrl+Super+V",
+  shelfShortcut: "Ctrl+Super+A",
   locale: "en",
   aiEnabled: false,
   aiProvider: "openrouter",

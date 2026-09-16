@@ -114,7 +114,11 @@ export function Shelf() {
         const last = Math.min(st.clips.length, 36) - 1;
         const i = Math.min(last, Math.max(0, st.clips.findIndex((c) => c.id === st.selectedId)));
         const next = e.key === "ArrowRight" ? Math.min(last, i + 1) : Math.max(0, i - 1);
-        if (st.clips[next]) st.select(st.clips[next].id);
+        if (st.clips[next]) {
+          st.select(st.clips[next].id);
+          // Se la preview è aperta la trascina dietro: il pannello sotto switcha clip.
+          if (st.previewId) st.setPreview(st.clips[next].id);
+        }
       }
     };
     window.addEventListener("keydown", onKey);

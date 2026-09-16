@@ -69,6 +69,11 @@ Riservare spazio a icone/etichette per evitare salti di layout.
 - Le finestre Tauri restano montate mentre sono nascoste: riprodurre il motion su
   `window-shown` con animation controls, senza cambiare la key dell'intero albero.
   Preservare input, scroll, selezione e stato delle clip.
+- Prima di emettere `window-shown`, la shelf deve essere spostata e dimensionata
+  sul monitor che contiene il puntatore. Usare coordinate e misure fisiche del
+  monitor, ripetere il posizionamento dopo `show()` per assestare il DPI e non
+  chiamare `center()` dopo una posizione esplicita: sui layout multi-monitor può
+  riportare la finestra sul primario e spostare l'origine della bolla.
 - La richiesta di chiusura nativa avvia il motion; il vero `hide()` viene dopo.
   Coprire Escape, backdrop, copia con chiusura, tray e shortcut. Una riapertura
   invalida la vecchia chiusura e gli eventuali fallback: nessun hide ritardato
@@ -93,7 +98,11 @@ Riservare spazio a icone/etichette per evitare salti di layout.
 - Liste: `layout` + `AnimatePresence mode="popLayout"`, exit ~120 ms.
   `cardDelay(i) = min(i, 10) * 0.026` limita lo stagger. Niente spinner su refetch.
 - Search: debounce 140 ms nello store; non riavviare il pannello a ogni carattere.
-- Immagini lazy, non trascinabili nella shelf e con dimensioni CSS fisse.
+- Immagini lazy e con dimensioni CSS fisse. Il nodo `<img>` resta
+  `draggable={false}`: la card è l'unica sorgente del drag verso il sistema.
+- Per file e immagini usare il drag nativo Tauri (`src/dragOut.ts`), con un PNG
+  di preview ridotto. Durante il gesto animare soltanto `transform` e `opacity`
+  della card; chiusura e click non devono partire al rilascio del drag.
 - Con `useReducedMotion`, niente deformazione, sequenze o attese decorative:
   mostrare direttamente lo stato finale. La conferma di successo resta visibile.
   `?shot=1` deve produrre una UI statica, completamente leggibile.

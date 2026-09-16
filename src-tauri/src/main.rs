@@ -55,7 +55,7 @@ impl Default for WatchSettings {
             auto_delete_days: 0,
             shortcuts_enabled: true,
             notch_enabled: true,
-            shelf_shortcut: "Ctrl+Super+V".into(),
+            shelf_shortcut: "Ctrl+Super+A".into(),
         }
     }
 }
@@ -357,31 +357,198 @@ fn ai_error_detail(text: &str) -> String {
 
 static CAPTURE_GEN: AtomicU64 = AtomicU64::new(0);
 
-fn fill_monitor(w: &tauri::WebviewWindow) {
-    // current_monitor() su finestra nascosta può dare None/Err (shelf parte
-    // visible=false): senza fallback la finestra resta 1920x1080 e su un
-    // portatile più piccolo il contenuto centrato esce dalla viewport e
-    // sembra decentrato. Catena cross-platform, niente API OS-specifiche.
-    let monitor = w
-        .current_monitor()
+#[derive(Clone, Copy)]
+struct MonitorBounds {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+fn monitor_index_at_point(bounds: &[MonitorBounds], point: PhysicalPosition<f64>) -> Option<usize> {
+    bounds.iter().position(|monitor| {
+        let left = f64::from(monitor.x);
+        let top = f64::from(monitor.y);
+        point.x >= left
+            && point.x < left + f64::from(monitor.width)
+            && point.y >= top
+            && point.y < top + f64::from(monitor.height)
+    })
+}
+
+fn is_wayland_session() -> bool {
+    cfg!(target_os = "linux")
+        && (std::env::var_os("WAYLAND_DISPLAY").is_some()
+            || std::env::var("XDG_SESSION_TYPE")
+                .map(|value| value.eq_ignore_ascii_case("wayland"))
+                .unwrap_or(false))
+}
+
+fn monitor_index_by_name(names: &[Option<&str>], target: &str) -> Option<usize> {
+    names.iter().position(|name| {
+        name.is_some_and(|name| name.trim().eq_ignore_ascii_case(target.trim()))
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn wayland_active_output_name() -> Option<String> {
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP")
+        .unwrap_or_default()
+        .to_uppercase();
+    if !(desktop.contains("KDE") || desktop.contains("PLASMA")) {
+        return None;
+    }
+    // KWin espone direttamente l'output attivo. Timeout corto: l'apertura della
+    // shelf non deve mai restare appesa se D-Bus o il compositor non rispondono.
+    let connection = zbus::blocking::connection::Builder::session()
+        .ok()?
+        .method_timeout(Duration::from_millis(80))
+        .build()
+        .ok()?;
+    let proxy = zbus::blocking::Proxy::new(
+        &connection,
+        "org.kde.KWin",
+        "/KWin",
+        "org.kde.KWin",
+    )
+    .ok()?;
+    let name: String = proxy.call("activeOutputName", &()).ok()?;
+    (!name.trim().is_empty()).then_some(name)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn wayland_active_output_name() -> Option<String> {
+    None
+}
+
+fn target_monitor(w: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
+    let monitors = w.available_monitors().ok().unwrap_or_default();
+    // Su X11 e Windows le coordinate sono globali e fisiche, come position/size
+    // dei monitor. Tao su Wayland restituisce invece (0, 0) perché il protocollo
+    // non espone la posizione globale del puntatore: in quel caso usare quel dato
+    // sceglierebbe quasi sempre il monitor sbagliato.
+    if is_wayland_session() {
+        if let Some(output) = wayland_active_output_name() {
+            let names: Vec<_> = monitors
+                .iter()
+                .map(|monitor| monitor.name().map(String::as_str))
+                .collect();
+            if let Some(index) = monitor_index_by_name(&names, &output) {
+                return monitors.get(index).cloned();
+            }
+        }
+    } else {
+        if let Ok(cursor) = w.cursor_position() {
+            let bounds: Vec<_> = monitors
+                .iter()
+                .map(|monitor| MonitorBounds {
+                    x: monitor.position().x,
+                    y: monitor.position().y,
+                    width: monitor.size().width,
+                    height: monitor.size().height,
+                })
+                .collect();
+            if let Some(index) = monitor_index_at_point(&bounds, cursor) {
+                return monitors.get(index).cloned();
+            }
+        }
+    }
+    w.current_monitor()
         .ok()
         .flatten()
         .or_else(|| w.primary_monitor().ok().flatten())
-        .or_else(|| {
-            w.available_monitors()
-                .ok()
-                .and_then(|ms| ms.into_iter().next())
-        });
-    let Some(monitor) = monitor else {
+        .or_else(|| monitors.into_iter().next())
+}
+
+#[cfg(test)]
+mod monitor_placement_tests {
+    use super::{monitor_index_at_point, monitor_index_by_name, MonitorBounds, PhysicalPosition};
+
+    #[test]
+    fn selects_monitor_containing_cursor_with_mixed_layout() {
+        let monitors = [
+            MonitorBounds {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
+            MonitorBounds {
+                x: 1920,
+                y: -240,
+                width: 2560,
+                height: 1440,
+            },
+            MonitorBounds {
+                x: -1280,
+                y: 120,
+                width: 1280,
+                height: 1024,
+            },
+        ];
+        assert_eq!(
+            monitor_index_at_point(&monitors, PhysicalPosition::new(3000.0, -100.0)),
+            Some(1)
+        );
+        assert_eq!(
+            monitor_index_at_point(&monitors, PhysicalPosition::new(-640.0, 600.0)),
+            Some(2)
+        );
+        assert_eq!(
+            monitor_index_at_point(&monitors, PhysicalPosition::new(960.0, 540.0)),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn uses_half_open_edges_and_rejects_points_outside_desktop() {
+        let monitors = [
+            MonitorBounds {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
+            MonitorBounds {
+                x: 1920,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
+        ];
+        assert_eq!(
+            monitor_index_at_point(&monitors, PhysicalPosition::new(1920.0, 500.0)),
+            Some(1)
+        );
+        assert_eq!(
+            monitor_index_at_point(&monitors, PhysicalPosition::new(3840.0, 500.0)),
+            None
+        );
+    }
+
+    #[test]
+    fn matches_kwin_output_name_without_case_or_whitespace_noise() {
+        let names = [Some("eDP-1"), Some("DP-6"), Some("DP-7")];
+        assert_eq!(monitor_index_by_name(&names, " dp-6\n"), Some(1));
+        assert_eq!(monitor_index_by_name(&names, "HDMI-A-1"), None);
+    }
+}
+
+fn fill_monitor(w: &tauri::WebviewWindow) {
+    // La shelf segue il puntatore a ogni apertura. current_monitor() da sola
+    // conserva spesso il monitor della precedente apertura quando la finestra
+    // è nascosta. Non chiamare center() dopo la posizione esplicita: su setup
+    // con coordinate negative o DPI diversi può riportarla sul primario.
+    let Some(monitor) = target_monitor(w) else {
         return;
     };
     let screen = monitor.size();
     let mon = monitor.position();
-    let _ = w.set_size(PhysicalSize::new(screen.width, screen.height));
     let _ = w.set_position(PhysicalPosition::new(mon.x, mon.y));
-    // set_position su Wayland è no-op (decide il compositor): center() è il
-    // fallback portabile. Con dimensione == monitor, centrata == fullscreen.
-    let _ = w.center();
+    // La posizione prima della misura fa applicare a Windows il DPI del monitor
+    // destinazione; la seconda chiamata in show_labeled stabilizza il resize
+    // dopo che il toplevel è tornato visibile.
+    let _ = w.set_size(PhysicalSize::new(screen.width, screen.height));
 }
 
 static SHELF_TRANSITION: Mutex<shelf_transition::ShelfTransition> =
@@ -398,6 +565,7 @@ fn show_labeled(app: &tauri::AppHandle, label: &str) {
                 fill_monitor(&w);
                 let _ = w.set_ignore_cursor_events(false);
                 let _ = w.show();
+                fill_monitor(&w);
                 let _ = w.set_focus();
             }
             "capture" => {
@@ -806,14 +974,15 @@ fn main() {
 
     // Shortcut globali desiderati (registrazione best-effort: Wayland/X11 e
     // Windows possono riservare alcune combo a livello di sistema).
-    // La shelf usa la stringa configurabile (default Ctrl+Super+V: Ctrl+Shift+V
-    // su Linux è "incolla" nel terminale; su Windows Super = tasto Win).
+    // La shelf usa la stringa configurabile (default Ctrl+Super+A:
+    // Ctrl+Shift+V su Linux è "incolla" nel terminale; su Windows Super = tasto Win).
     let library = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyL);
 
     tauri::Builder::default()
         .manage(state)
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_drag::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -823,7 +992,7 @@ fn main() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .setup(move |app| {
             // Tray
-            let toggle = MenuItem::with_id(app, "toggle", "Apri Shelf  (Ctrl+Super+V)", true, None::<&str>)?;
+            let toggle = MenuItem::with_id(app, "toggle", "Apri Shelf  (Ctrl+Super+A)", true, None::<&str>)?;
             let lib = MenuItem::with_id(app, "library", "Libreria  (Ctrl+Shift+L)", true, None::<&str>)?;
             let settings = MenuItem::with_id(app, "settings", "Impostazioni", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Esci", true, None::<&str>)?;

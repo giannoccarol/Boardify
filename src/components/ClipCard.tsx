@@ -2,12 +2,11 @@ import { memo, useEffect, useRef, useState, type DragEvent, type KeyboardEvent, 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Pin, Copy, Star, Trash2, ShieldAlert, Code2, Link2, Play, Check } from "lucide-react";
 import { useClipImageSrc } from "../clipImage";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Clip } from "../types";
-import { cardTitle, imageFileUrl, kindLabel, prettyApp, timeAgo } from "../types";
+import { cardTitle, kindLabel, prettyApp, timeAgo } from "../types";
 import { clipSizeClass } from "../settings";
 import { useBoardify } from "../store";
-import { isTauri } from "../demo";
+import { beginClipDrag, isFileDragClip } from "../dragOut";
 import { AppBadge } from "./AppBadge";
 import { ActionGlyph } from "./ActionGlyph";
 import { extractUrl, parseMedia } from "../linkMeta";
@@ -46,12 +45,14 @@ export const ClipCard = memo(function ClipCard({ clip, selected, index, variant 
   const [copySequence, setCopySequence] = useState(0);
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dragIgnore = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragRun = useRef(0);
+  const draggedAt = useRef(0);
 
   useEffect(() => () => {
     if (timer.current) clearTimeout(timer.current);
-    if (dragIgnore.current) clearTimeout(dragIgnore.current);
+    dragRun.current += 1;
   }, []);
 
   const flashCopied = () => {
@@ -123,34 +124,34 @@ export const ClipCard = memo(function ClipCard({ clip, selected, index, variant 
         data-selected={selected}
         data-multi={isMulti}
         data-kind={clip.kind}
+        data-dragging={dragging}
+        data-exportable={isFileDragClip(clip)}
         tabIndex={0}
         role="group"
         aria-label={cardTitle(clip)}
         onKeyDown={keyboardCard}
-        draggable={variant !== "shelf"}
+        draggable
         data-tauri-drag-region="false"
         onMouseDown={(e) => e.stopPropagation()}
         onDragStartCapture={(e: DragEvent) => {
-          if (variant === "shelf") { e.preventDefault(); return; }
-          e.dataTransfer.setData("text/plain", clip.text ?? clip.preview);
-          const url = imageFileUrl(clip);
-          if (url) e.dataTransfer.setData("text/uri-list", url + "\r\n");
-          if (isTauri()) {
-            const w = getCurrentWindow();
-            if (dragIgnore.current) clearTimeout(dragIgnore.current);
-            dragIgnore.current = setTimeout(() => {
-              dragIgnore.current = null;
-              w.setIgnoreCursorEvents(true).catch(() => {});
-            }, 160);
-          }
+          if ((e.target as HTMLElement).closest("button")) { e.preventDefault(); return; }
+          const run = ++dragRun.current;
+          draggedAt.current = performance.now();
+          setDragging(true);
+          const finish = () => {
+            draggedAt.current = performance.now();
+            if (dragRun.current === run) setDragging(false);
+          };
+          if (beginClipDrag(clip, e.dataTransfer, e.currentTarget as HTMLDivElement, finish)) e.preventDefault();
         }}
         onDragEndCapture={() => {
-          if (dragIgnore.current) clearTimeout(dragIgnore.current);
-          dragIgnore.current = null;
-          if (isTauri()) getCurrentWindow().setIgnoreCursorEvents(false).catch(() => {});
+          dragRun.current += 1;
+          draggedAt.current = performance.now();
+          setDragging(false);
         }}
         onClick={(e) => {
           if ((e.target as HTMLElement).closest("button")) return;
+          if (draggedAt.current > 0 && performance.now() - draggedAt.current < 350) return;
           e.stopPropagation();
           if (e.shiftKey) toggleMulti(clip.id);
           else openCard();
@@ -200,6 +201,8 @@ function clipCardEqual(p: Props, n: Props): boolean {
     a.kind === b.kind &&
     a.color_hex === b.color_hex &&
     a.image_path === b.image_path &&
+    (a.file_paths ?? []).length === (b.file_paths ?? []).length &&
+    (a.file_paths ?? []).every((path, i) => path === (b.file_paths ?? [])[i]) &&
     a.source_app === b.source_app &&
     a.source_icon === b.source_icon &&
     a.is_favorite === b.is_favorite &&

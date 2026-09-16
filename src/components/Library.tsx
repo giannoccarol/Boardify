@@ -8,7 +8,7 @@ import { ClipCard } from "./ClipCard";
 import { Brand } from "./Brand";
 import { CategoryPills } from "./CategoryPills";
 import { AppBadge } from "./AppBadge";
-import { byteSize, groupClips, imageDimensions, imageFileUrl, prettyApp, timeAgo } from "../types";
+import { byteSize, groupClips, imageDimensions, prettyApp, timeAgo } from "../types";
 import { formatCopy } from "../settings";
 import { isTauri } from "../demo";
 import { snappy, soft } from "../motion";
@@ -16,6 +16,7 @@ import { useT } from "../i18n";
 import { useClipImageSrc } from "../clipImage";
 import { clipColor, isDataImage, isSvgMarkup, parseGradientCss } from "../color";
 import { normalizeShortcut } from "../smartActions";
+import { beginClipDrag } from "../dragOut";
 
 export function Library() {
   const s = useBoardify();
@@ -313,12 +314,7 @@ function InspectorPanel({ clipId }: { clipId: string }) {
             alt=""
             draggable
             onDragStart={(e) => {
-              const url = imageFileUrl(selected);
-              if (url) e.dataTransfer.setData("text/uri-list", url + "\r\n");
-              if (isTauri()) getCurrentWindow().setIgnoreCursorEvents(true).catch(() => {});
-            }}
-            onDragEnd={() => {
-              if (isTauri()) getCurrentWindow().setIgnoreCursorEvents(false).catch(() => {});
+              if (beginClipDrag(selected, e.dataTransfer, e.currentTarget, () => {})) e.preventDefault();
             }}
             className="w-full max-h-52 object-cover rounded-2xl ring-1 ring-white/10 bg-[#111] cursor-grab"
           />

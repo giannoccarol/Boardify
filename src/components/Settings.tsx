@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -158,15 +158,30 @@ function ShortcutRecorder({ value, onChange }: { value: string; onChange: (v: st
   const { t } = useT();
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  return <div className="shortcut-recorder"><button aria-label={listening ? t("settings.pressKeys") : t("settings.editShortcut", { value })} className={`shortcut-button ${listening ? "is-listening" : ""}`} onClick={() => { setListening(true); setError(null); }} onBlur={() => setListening(false)} onKeyDown={(e) => {
+  // Su WebKitGTK il flag metaKey di Super è inaffidabile (spesso false anche
+  // a tasto premuto): i modificatori si tracciano dai keydown/keyup ricevuti,
+  // i flag servono solo da rete di sicurezza.
+  const held = useRef<Set<string>>(new Set());
+  const modOf = (key: string): string | null =>
+    key === "Control" ? "Ctrl"
+    : key === "Alt" ? "Alt"
+    : key === "Shift" ? "Shift"
+    : key === "Meta" || key === "OS" ? "Super"
+    : null;
+  const stop = () => { setListening(false); held.current.clear(); };
+  return <div className="shortcut-recorder"><button aria-label={listening ? t("settings.pressKeys") : t("settings.editShortcut", { value })} className={`shortcut-button ${listening ? "is-listening" : ""}`} onClick={() => { setListening(true); setError(null); }} onBlur={stop} onKeyUp={(e) => { const m = modOf(e.key); if (m) held.current.delete(m); }} onKeyDown={(e) => {
     if (!listening) return;
     e.preventDefault(); e.stopPropagation();
-    if (e.key === "Escape") { setListening(false); return; }
-    if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return;
-    const mods = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Super"].filter(Boolean) as string[];
+    if (e.key === "Escape") { stop(); return; }
+    const pressed = modOf(e.key);
+    if (pressed) { held.current.add(pressed); return; }
+    const mods = ["Ctrl", "Alt", "Shift", "Super"].filter((m) =>
+      held.current.has(m) ||
+      (m === "Ctrl" && e.ctrlKey) || (m === "Alt" && e.altKey) ||
+      (m === "Shift" && e.shiftKey) || (m === "Super" && e.metaKey));
     const key = e.code === "Space" ? "Space" : /^[a-z0-9]$/i.test(e.key) || /^F([1-9]|1[0-2])$/i.test(e.key) ? e.key.toUpperCase() : null;
     if (!mods.length || !key) { setError(t("settings.shortcutError")); return; }
-    setListening(false); setError(null); onChange([...mods, key].join("+"));
+    stop(); setError(null); onChange([...mods, key].join("+"));
   }}>{listening ? <span>{t("settings.pressKeys")}</span> : <Keycaps value={value} />}</button>{error && <p role="alert">{error}</p>}</div>;
 }
 function Segment({ label, value, options, onChange }: { label: string; value: string; options: [string, string][]; onChange: (value: string) => void }) {
