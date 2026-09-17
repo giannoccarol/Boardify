@@ -43,6 +43,8 @@ tauri-plugin-drag = "2.1.1"
 # Backend Wayland per arboard + D-Bus per KWin: solo Linux.
 arboard = { version = "3", features = ["wayland-data-control"] }
 zbus = "5"
+# Stream D-Bus per il portal GlobalShortcuts (solo Wayland): niente in Windows.
+futures-util = "0.3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # API native: dialoghi, icone .exe, snapshot processi, cattura schermo (GDI).

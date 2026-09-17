@@ -6,6 +6,8 @@ mod db;
 mod detect;
 mod icons;
 mod paste;
+#[cfg(target_os = "linux")]
+mod portal;
 #[cfg(target_os = "windows")]
 mod screen;
 mod source;
@@ -31,6 +33,49 @@ pub struct AppState {
     pub clipboard_gate: Mutex<()>,
     pub watch: Arc<Mutex<WatchSettings>>,
     pub seq: Arc<Mutex<usize>>,
+    pub shortcut_status: Arc<Mutex<ShortcutStatus>>,
+}
+
+/// Stato leggibile della shortcut shelf: mai più errori ingoiati in silenzio.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShortcutStatus {
+    /// "x11" | "portal" | "native"
+    pub backend: String,
+    pub shelf_bound: bool,
+    pub detail: String,
+}
+
+impl Default for ShortcutStatus {
+    fn default() -> Self {
+        Self {
+            backend: if cfg!(target_os = "windows") {
+                "native".to_string()
+            } else {
+                "x11".to_string()
+            },
+            shelf_bound: false,
+            detail: String::new(),
+        }
+    }
+}
+
+/// Generazione del loop portal: un rebind invalida i loop precedenti
+/// (due loop = doppio toggle = nessun effetto).
+static PORTAL_GEN: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn portal_generation() -> &'static AtomicU64 {
+    &PORTAL_GEN
+}
+
+fn note_shortcut_status(app: &tauri::AppHandle, bound: bool, detail: String) {
+    if let Ok(mut st) = app
+        .state::<AppState>()
+        .shortcut_status
+        .lock()
+    {
+        st.shelf_bound = bound;
+        st.detail = detail;
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -956,7 +1001,7 @@ fn register_shelf_shortcut(app: &tauri::AppHandle, shortcut: &str) -> Result<(),
     use std::str::FromStr;
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
     let sc = Shortcut::from_str(shortcut).map_err(|e| format!("shortcut non valida: {e}"))?;
-    let _ = app.global_shortcut().on_shortcut(sc, |app, _s, ev| {
+    app.global_shortcut().on_shortcut(sc, |app, _s, ev| {
         if ev.state == ShortcutState::Pressed && shortcuts_on(app) {
             let ok = app
                 .state::<AppState>()
@@ -968,8 +1013,34 @@ fn register_shelf_shortcut(app: &tauri::AppHandle, shortcut: &str) -> Result<(),
                 toggle_window(app, "shelf");
             }
         }
-    });
+    }).map_err(|e| {
+        // Su Wayland i grab X11 non arrivano: l'errore finisce nello stato
+        // leggibile (comando shortcut_status) invece di sparire nel nulla.
+        let msg = format!("registrazione X11 fallita ({e}); su Wayland serve il portale");
+        note_shortcut_status(app, false, msg.clone());
+        msg
+    })?;
+    note_shortcut_status(app, true, format!("X11: {shortcut}"));
     Ok(())
+}
+
+/// Stato della shortcut shelf per Settings/diagnostica.
+#[tauri::command]
+fn shortcut_status(state: State<AppState>) -> ShortcutStatus {
+    state.shortcut_status.lock().map(|s| s.clone()).unwrap_or_default()
+}
+
+/// Su Wayland rilega la shortcut shelf via portal (nuova sessione, il backend
+/// ricorda il binding). Altrove: riusa la via nativa.
+#[tauri::command]
+fn portal_rebind(app: tauri::AppHandle) -> Result<String, String> {
+    #[cfg(target_os = "linux")]
+    if is_wayland_session() {
+        portal::spawn_portal_loop(app);
+        return Ok("portal: binding richiesto, approva nel dialogo di sistema".into());
+    }
+    let _ = app;
+    Err("rebind necessario solo su Wayland".into())
 }
 
 #[tauri::command]
@@ -1008,6 +1079,11 @@ fn apply_watch_settings(
             let _ = handle.unregister(old_sc);
         }
         register_shelf_shortcut(&app, &new_sc.to_string())?;
+        // Su Wayland il binding portal segue la nuova combinazione.
+        #[cfg(target_os = "linux")]
+        if is_wayland_session() {
+            portal::spawn_portal_loop(app.clone());
+        }
     }
     if auto_delete_days > 0 {
         if let Ok(db) = state.db.lock() {
@@ -1178,6 +1254,7 @@ fn main() {
         clipboard_gate: Mutex::new(()),
         watch: Arc::new(Mutex::new(WatchSettings::default())),
         seq: Arc::new(Mutex::new(0)),
+        shortcut_status: Arc::new(Mutex::new(ShortcutStatus::default())),
     };
 
     // Shortcut globali desiderati (registrazione best-effort: Wayland/X11 e
@@ -1231,7 +1308,15 @@ fn main() {
                 .build(app)?;
 
             // Global shortcuts
-            let _ = register_shelf_shortcut(app.handle(), &WatchSettings::default().shelf_shortcut);
+            // Su Wayland i grab X11 non funzionano: la shelf passa dal portal
+            // (dialogo di approvazione una volta sola), gli altri restano best-effort.
+            #[cfg(target_os = "linux")]
+            if is_wayland_session() {
+                portal::spawn_portal_loop(app.handle().clone());
+            }
+            if let Err(e) = register_shelf_shortcut(app.handle(), &WatchSettings::default().shelf_shortcut) {
+                eprintln!("[boardify] shelf shortcut X11 non registrata: {e}");
+            }
             let handle = app.global_shortcut();
             let _ = handle.on_shortcut(library, |app, _s, ev| {
                 if ev.state == ShortcutState::Pressed && shortcuts_on(app) {
@@ -1333,6 +1418,8 @@ fn main() {
             delete_space,
             assign_space,
             get_space_clips,
+            shortcut_status,
+            portal_rebind,
             get_stats,
             ai_proxy,
             show_window,

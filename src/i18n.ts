@@ -299,6 +299,11 @@ const en = {
   "settings.maxItems": "Max clips",
   "settings.maxItemsHint": "Keeps only the most recent. Favorites, pins and reminders are exempt.",
   "settings.unlimited": "Unlimited",
+  "shortcut.portalActive": "System shortcut active: {detail}.",
+  "shortcut.portalWaiting": "Connecting to the system shortcuts portal…",
+  "shortcut.portalFailed": "System shortcut unavailable: {detail}.",
+  "shortcut.workaround": "Alternative: tray click, or bind a system shortcut that launches Boardify (a second launch toggles the shelf).",
+  "shortcut.rebind": "Request again",
 
   "ai.menu": "AI actions",
   "ai.configure": "Enable AI in Settings → AI",
@@ -648,6 +653,11 @@ const it: Record<DictKey, string> = {
   "settings.maxItems": "Max clip",
   "settings.maxItemsHint": "Tiene solo i più recenti. Preferiti, pin e reminder sono esenti.",
   "settings.unlimited": "Illimitati",
+  "shortcut.portalActive": "Scorciatoia di sistema attiva: {detail}.",
+  "shortcut.portalWaiting": "Connessione al portale scorciatoie di sistema…",
+  "shortcut.portalFailed": "Scorciatoia di sistema non disponibile: {detail}.",
+  "shortcut.workaround": "Alternativa: click sul tray, o una scorciatoia di sistema che lancia Boardify (il secondo lancio apre/chiude lo shelf).",
+  "shortcut.rebind": "Richiedi di nuovo",
 
   "ai.menu": "Azioni AI",
   "ai.configure": "Abilita l'AI in Impostazioni → AI",

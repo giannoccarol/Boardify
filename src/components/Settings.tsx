@@ -22,6 +22,59 @@ const PANELS = [
 ] as const;
 type Panel = typeof PANELS[number]["id"];
 
+interface ShortcutBackendState {
+  backend: string;
+  shelf_bound: boolean;
+  detail: string;
+}
+
+/** Stato leggibile del backend shortcut (portal su Wayland): niente più silenzi. */
+function ShortcutBackendNote() {
+  const { t } = useT();
+  const [st, setSt] = useState<ShortcutBackendState | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let live = true;
+    const fetch = () => invoke<ShortcutBackendState>("shortcut_status").then((s) => {
+      if (live) setSt(s);
+    }).catch(() => {});
+    fetch();
+    const timer = setTimeout(fetch, 4000);
+    return () => { live = false; clearTimeout(timer); };
+  }, []);
+  if (!st) return null;
+  if (st.backend !== "portal" && st.shelf_bound) return null;
+  const waiting = st.backend === "portal" && !st.shelf_bound && /connessione|connecting/i.test(st.detail);
+  return (
+    <div className="settings-note" role="status">
+      <Keyboard size={16} />
+      <p>
+        {st.backend === "portal" && st.shelf_bound
+          ? t("shortcut.portalActive", { detail: st.detail })
+          : waiting
+            ? t("shortcut.portalWaiting")
+            : t("shortcut.portalFailed", { detail: st.detail || "?" })}
+        {" "}{t("shortcut.workaround")}
+      </p>
+      {st.backend === "portal" && !st.shelf_bound && !waiting && (
+        <button
+          className="secondary-button"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            try { await invoke("portal_rebind"); } catch { /* lo stato parla */ }
+            setTimeout(() => invoke<ShortcutBackendState>("shortcut_status").then(setSt).catch(() => {}), 2000);
+            setBusy(false);
+          }}
+        >
+          <RefreshCw size={14} />{t("shortcut.rebind")}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function Settings() {
   const settings = useBoardify((s) => s.settings);
   const patchSettings = useBoardify((s) => s.patchSettings);
@@ -121,6 +174,7 @@ export function Settings() {
               <div className="keyboard-feature"><span className="eyebrow">{t("settings.nextClip")}</span><Keycaps value={settings.shelfShortcut} /><p>{t("settings.nextClipSub")}</p></div>
               <Section title={t("settings.quickAccess")}><Toggle label={t("settings.globalShortcuts")} hint={t("settings.globalShortcutsHint")} checked={settings.shortcutsEnabled} onChange={(v) => set("shortcutsEnabled", v)} /><Row label={t("settings.openShelf")} hint={t("settings.openShelfHint")}><ShortcutRecorder value={settings.shelfShortcut} onChange={(v) => set("shelfShortcut", v)} /></Row></Section>
               <Section title={t("settings.allAtFingertips")}>{[[t("settings.openLibrary"), "Ctrl+Shift+L"], [t("settings.newNote"), "Ctrl+Shift+N"], [t("settings.captureClip"), "Ctrl+Shift+S"], [t("settings.colorPicker"), "Ctrl+Shift+P"], [t("settings.screenText"), "Ctrl+Shift+T"], [t("settings.copyRecent"), "Ctrl+Shift+0–9"]].map(([label, keys]) => <Row label={label} key={label}><Keycaps value={keys} /></Row>)}</Section>
+              <ShortcutBackendNote />
             </>}
             {panel === "privacy" && <>
               <div className="privacy-feature"><span className="privacy-emblem"><LockKeyhole size={28} strokeWidth={1.6} /></span><div><span className="eyebrow">{t("settings.localFirst")}</span><h2>{t("settings.safeTitle")}</h2><p>{t("settings.safeSub")}</p></div></div>
