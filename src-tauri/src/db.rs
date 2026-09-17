@@ -154,13 +154,33 @@ fn db_key_hex() -> String {
     hex
 }
 
-fn apply_key(conn: &Connection) -> SqlResult<()> {
-    // Hex-only interpolato: niente injection possibile (validato sopra).
-    let hex = db_key_hex();
+fn apply_key(conn: &Connection, hex: &str) -> SqlResult<()> {
+    // Hex-only interpolato: niente injection possibile (validato in db_key_hex).
+    debug_assert!(hex.len() >= 32 && hex.chars().all(|c| c.is_ascii_hexdigit()));
     conn.execute_batch(&format!("PRAGMA key = \"x'{hex}'\";"))?;
     // Migrazione versioni SQLCipher vecchie; su DB plain fallisce e il chiamante gestisce.
     let _ = conn.execute_batch("PRAGMA cipher_migrate;");
     Ok(())
+}
+
+fn probe(conn: &Connection) -> SqlResult<()> {
+    conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+        r.get::<_, i64>(0)
+    })?;
+    Ok(())
+}
+
+/// Apre senza chiave e in sola lettura: true solo se è un DB plain leggibile.
+fn is_plain_db(path: &std::path::Path) -> bool {
+    let Ok(conn) = Connection::open(path) else { return false };
+    let _ = conn.execute_batch("PRAGMA query_only = ON;");
+    probe(&conn).is_ok()
+}
+
+fn sidecar(path: &std::path::Path, ext: &str) -> std::path::PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(ext);
+    std::path::PathBuf::from(s)
 }
 
 impl Db {
@@ -172,35 +192,26 @@ impl Db {
     }
 
     pub fn open() -> SqlResult<Self> {
-        let path = data_dir().join("clips.db");
+        // Chiave risolta UNA volta per avvio: riusarla ovunque evita di cifrare
+        // con una chiave e riaprire con un'altra (DB illeggibile al 2° avvio).
+        let hex = db_key_hex();
+        Self::open_at(&data_dir().join("clips.db"), Some(hex.as_str()))
+    }
+
+    /// `key=None` = DB plain (solo test + check pre-migrazione). Mai in produzione.
+    fn open_at(path: &std::path::Path, key: Option<&str>) -> SqlResult<Self> {
         let fresh = !path.exists();
-        let conn = Connection::open(&path)?;
-        apply_key(&conn)?;
+        let conn = Connection::open(path)?;
+        if let Some(hex) = key {
+            apply_key(&conn, hex)?;
+        }
         // Se il file era plain (pre-SQLCipher), la prima query fallisce con
         // "file is not a database": backup + export cifrato, poi riapri.
-        let probe = conn.query_row(
-            "SELECT count(*) FROM sqlite_master",
-            [],
-            |r| r.get::<_, i64>(0),
-        );
-        let conn = match probe {
+        let conn = match probe(&conn) {
             Ok(_) => conn,
-            Err(_) if !fresh => {
+            Err(_) if !fresh && key.is_some() => {
                 drop(conn);
-                let hex = db_key_hex();
-                let bak = data_dir().join("clips.db.plain.bak");
-                if !bak.exists() {
-                    let _ = std::fs::copy(&path, &bak);
-                }
-                Self::encrypt_plain_file(&path, &hex)?;
-                let conn2 = Connection::open(&path)?;
-                apply_key(&conn2)?;
-                conn2.query_row(
-                    "SELECT count(*) FROM sqlite_master",
-                    [],
-                    |r| r.get::<_, i64>(0),
-                )?;
-                conn2
+                Self::migrate_plain_to_encrypted(path, key.unwrap_or(""))?
             }
             Err(e) => return Err(e),
         };
@@ -209,11 +220,60 @@ impl Db {
         Ok(db)
     }
 
+    /// Migra un DB plain a cifrato. Rifiuta tutto ciò che non è plain leggebile
+    /// così un file già cifrato/corroto non viene mai sovrascritto (niente spirale).
+    fn migrate_plain_to_encrypted(path: &std::path::Path, hex: &str) -> SqlResult<Connection> {
+        if !is_plain_db(path) {
+            let bak = path.with_extension("db.plain.bak");
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_NOTADB),
+                Some(format!(
+                    "DB illeggibile (né cifrato valido né plain). Backup intatto: {}",
+                    bak.display()
+                )),
+            ));
+        }
+        let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let bak = parent.join("clips.db.plain.bak");
+        if !bak.exists() {
+            std::fs::copy(path, &bak).map_err(io_err)?;
+        }
+        Self::encrypt_plain_file(path, hex)?;
+        // Sidecar del vecchio plain (wal/shm/journal): orfani e velenosi per il
+        // file cifrato, vanno rimossi dopo la rename.
+        for ext in ["-wal", "-shm", "-journal"] {
+            let _ = std::fs::remove_file(sidecar(path, ext));
+        }
+        let conn = Connection::open(path)?;
+        apply_key(&conn, hex)?;
+        probe(&conn).map_err(|_| {
+            rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_NOTADB),
+                Some(format!(
+                    "Migrazione fallita, originale intatto in: {}. Ripristinalo e riprova.",
+                    bak.display()
+                )),
+            )
+        })?;
+        Ok(conn)
+    }
+
     /// Cifra un DB plain esistente: ATTACH + sqlcipher_export (documentato SQLCipher).
     fn encrypt_plain_file(path: &std::path::Path, hex: &str) -> SqlResult<()> {
         let tmp = path.with_extension("encrypted.tmp");
         let _ = std::fs::remove_file(&tmp);
-        let plain = Connection::open(path)?;
+        // WAL orfano e corrotto (crash): riprova senza, single-instance esclude
+        // scrittori concorrenti quindi niente dati altrui da perdere.
+        let mut plain = Connection::open(path);
+        if plain.is_err() {
+            for ext in ["-wal", "-shm", "-journal"] {
+                let _ = std::fs::remove_file(sidecar(path, ext));
+            }
+            plain = Connection::open(path);
+        }
+        let plain = plain?;
+        // Scarica il WAL nel main così l'export vede tutte le righe.
+        let _ = plain.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
         // Percorso con ' escapato per SQL (Windows usa \ ma niente ' nei nostri path tipici).
         let tmp_s = tmp.to_string_lossy().replace('\'', "''");
         plain.execute_batch(&format!(
@@ -1411,6 +1471,71 @@ mod tests {
         let out = db.backup_to(&dest, &empty_img).unwrap();
         assert!(out.join("clips.db").exists());
         std::fs::remove_dir_all(&dest).unwrap();
+    }
+
+    /// Regressione panico NotADatabase all'avvio su DB plain pre-SQLCipher:
+    /// migra preservando i dati, cifra, e le riaperture restano stabili.
+    #[test]
+    fn plain_db_migrates_to_encrypted_and_reopens_idempotently() {
+        let dir = std::env::temp_dir().join(format!("boardify-migrate-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("clips.db");
+        let key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        // Simula installazione pre-SQLCipher: DB plain con righe, chiuso.
+        {
+            let db = Db::open_at(&path, None).unwrap();
+            db.insert_text("text", "riga da preservare", "firefox", "", "mig1", false, None, None).unwrap();
+            db.insert_text("link", "https://example.com", "firefox", "", "mig2", false, None, None).unwrap();
+        }
+        assert!(is_plain_db(&path));
+        // Primo avvio con chiave: migra e preserva tutto.
+        {
+            let db = Db::open_at(&path, Some(key)).unwrap();
+            let rows = db.list(100, None, None, false).unwrap();
+            assert_eq!(rows.len(), 2);
+            assert!(rows.iter().any(|r| r.text.as_deref() == Some("riga da preservare")));
+        }
+        // Ora è cifrato: senza chiave non si apre più...
+        assert!(!is_plain_db(&path));
+        assert!(Db::open_at(&path, None).is_err());
+        // ...e con la chiave si riapre sempre (niente spirale di ri-migrazione).
+        {
+            let db = Db::open_at(&path, Some(key)).unwrap();
+            assert_eq!(db.list(100, None, None, false).unwrap().len(), 2);
+        }
+        // Chiave sbagliata: errore chiaro, file intatto, la chiave giusta funziona ancora.
+        assert!(Db::open_at(
+            &path,
+            Some("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+        )
+        .is_err());
+        assert_eq!(
+            Db::open_at(&path, Some(key)).unwrap().list(100, None, None, false).unwrap().len(),
+            2
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// WAL orfano corrotto accanto a un plain valido: la migrazione lo scarta e preserva i dati.
+    #[test]
+    fn corrupt_wal_sidecar_does_not_block_migration() {
+        let dir = std::env::temp_dir().join(format!("boardify-wal-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("clips.db");
+        let key = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        {
+            let db = Db::open_at(&path, None).unwrap();
+            db.insert_text("text", "sopravvivo al wal", "firefox", "", "wal1", false, None, None).unwrap();
+        }
+        // Sidecar spazzatura come dopo un crash: main db integro, WAL illeggibile.
+        let mut wal = path.as_os_str().to_owned();
+        wal.push("-wal");
+        std::fs::write(&wal, b"garbage-not-a-wal").unwrap();
+        let db = Db::open_at(&path, Some(key)).unwrap();
+        let rows = db.list(100, None, None, false).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].text.as_deref(), Some("sopravvivo al wal"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
